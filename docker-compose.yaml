@@ -1,0 +1,55 @@
+services:
+  api:
+    build:
+      context: ./api
+    restart: always
+    environment:
+      - PORT=9000
+      - DATABASE_URL=${DATABASE_URL}
+      - DIRECT_URL=${DIRECT_URL}
+      - KAFKA_BROKER=${KAFKA_BROKER}
+      - KAFKA_USERNAME=${KAFKA_USERNAME}
+      - KAFKA_PASSWORD=${KAFKA_PASSWORD}
+      - KAFKA_TOPIC=${KAFKA_TOPIC}
+      - CLICKHOUSE_URL=${CLICKHOUSE_URL}
+      - CLICKHOUSE_DATABASE=${CLICKHOUSE_DATABASE}
+      - AWS_ACCESS_KEY_ID
+      - AWS_SECRET_ACCESS_KEY
+      - AWS_REGION=${AWS_REGION:-ap-south-1}
+      - AWS_ECS_CLUSTER=${AWS_ECS_CLUSTER}
+      - AWS_ECS_TASK_DEFINITION=${AWS_ECS_TASK_DEFINITION}
+      - AWS_ECS_CONTAINER_NAME=${AWS_ECS_CONTAINER_NAME}
+      - AWS_ECS_SUBNETS=${AWS_ECS_SUBNETS}
+      - AWS_ECS_SECURITY_GROUPS=${AWS_ECS_SECURITY_GROUPS}
+      - AWS_S3_BUCKET=${AWS_S3_BUCKET}
+    ports:
+      - "9000:9000"
+    volumes:
+      - ./api/prisma/ca.pem:/app/ca.pem:ro
+      - ./api/prisma:/app/prisma:ro
+      - ~/.aws:/root/.aws:ro
+    networks:
+      - yok-network
+
+  reverse-proxy:
+    build:
+      context: ./reverse-proxy
+    restart: always
+    environment:
+      - PORT=8000
+      - API_SERVER_URL=http://api:9000
+      - AWS_S3_BUCKET=${AWS_S3_BUCKET}
+      - AWS_REGION=${AWS_REGION:-ap-south-1}
+    ports:
+      - "8000:8000"
+    volumes:
+      - ~/.aws:/root/.aws:ro
+    depends_on:
+      - api
+    networks:
+      - yok-network
+
+networks:
+  yok-network:
+    driver: bridge
+    name: yok-network
