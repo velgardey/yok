@@ -1,0 +1,51 @@
+name: Keep Services Alive
+
+on:
+  schedule:
+    # Run every 5 minutes
+    - cron: '*/5 * * * *'
+  # Allow manual triggering
+  workflow_dispatch:
+
+jobs:
+  ping:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Ping API Service
+        id: ping-api
+        run: |
+          echo "Pinging API service at $(date)"
+          STATUS=$(curl -s -o /dev/null -w "%{http_code}" https://api.yok.ninja/health || echo "failed")
+          echo "API Status: $STATUS"
+          echo "status=$STATUS" >> $GITHUB_OUTPUT
+        
+      - name: Ping Reverse Proxy
+        id: ping-proxy
+        run: |
+          echo "Pinging Reverse Proxy service at $(date)"
+          STATUS=$(curl -s -o /dev/null -w "%{http_code}" https://yok.ninja || echo "failed")
+          echo "Reverse Proxy Status: $STATUS"
+          echo "status=$STATUS" >> $GITHUB_OUTPUT
+          
+      - name: Report Status
+        id: report
+        run: |
+          echo "API Status: ${{ steps.ping-api.outputs.status }}"
+          echo "Reverse Proxy Status: ${{ steps.ping-proxy.outputs.status }}"
+          
+          if [[ "${{ steps.ping-api.outputs.status }}" != "200" || "${{ steps.ping-proxy.outputs.status }}" != "200" ]]; then
+            echo "is_down=true" >> $GITHUB_OUTPUT
+            echo "⚠️ One or more services returned a non-200 status code"
+          else
+            echo "is_down=false" >> $GITHUB_OUTPUT
+            echo "✅ All services are up and running"
+          fi
+          
+      # Optional: Send notification if services are down
+      # Uncomment and set up WEBHOOK_URL secret in your repository settings
+      # - name: Send notification if services are down
+      #   if: steps.report.outputs.is_down == 'true'
+      #   run: |
+      #     curl -X POST -H "Content-Type: application/json" \
+      #     -d '{"text":"⚠️ Alert: One or more Yok services are down. API: ${{ steps.ping-api.outputs.status }}, Proxy: ${{ steps.ping-proxy.outputs.status }}"}' \
+      #     ${{ secrets.WEBHOOK_URL }} 
