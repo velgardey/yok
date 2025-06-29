@@ -23,7 +23,7 @@ jobs:
         id: ping-proxy
         run: |
           echo "Pinging Reverse Proxy service at $(date)"
-          STATUS=$(curl -s -o /dev/null -w "%{http_code}" https://yok.ninja || echo "failed")
+          STATUS=$(curl -s -o /dev/null -w "%{http_code}" https://01d7f245-ed3a-4153-9305-2e1f52b40256.yok.ninja || echo "failed")
           echo "Reverse Proxy Status: $STATUS"
           echo "status=$STATUS" >> $GITHUB_OUTPUT
           
@@ -40,12 +40,4 @@ jobs:
             echo "is_down=false" >> $GITHUB_OUTPUT
             echo "✅ All services are up and running"
           fi
-          
-      # Optional: Send notification if services are down
-      # Uncomment and set up WEBHOOK_URL secret in your repository settings
-      # - name: Send notification if services are down
-      #   if: steps.report.outputs.is_down == 'true'
-      #   run: |
-      #     curl -X POST -H "Content-Type: application/json" \
-      #     -d '{"text":"⚠️ Alert: One or more Yok services are down. API: ${{ steps.ping-api.outputs.status }}, Proxy: ${{ steps.ping-proxy.outputs.status }}"}' \
-      #     ${{ secrets.WEBHOOK_URL }} 
+        
