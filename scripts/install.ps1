@@ -45,13 +45,14 @@ try {
     try {
         $LatestRelease = Invoke-RestMethod -Uri "https://api.github.com/repos/$GithubRepo/releases/latest"
         $Version = $LatestRelease.tag_name
+        $VersionWithoutPrefix = $Version.TrimStart('v')
         Write-Host "Latest version: $Version" -ForegroundColor Cyan
     } catch {
         Handle-Error "Failed to get latest release information. Please check your internet connection." $_
     }
 
     # Download the archive
-    $ArchiveName = "yok_${Version}_windows_amd64.zip"
+    $ArchiveName = "yok_${VersionWithoutPrefix}_windows_amd64.zip"
     $DownloadUrl = "https://github.com/$GithubRepo/releases/download/$Version/$ArchiveName"
     $ZipPath = "$env:TEMP\$ArchiveName"
 
