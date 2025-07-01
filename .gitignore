@@ -46,3 +46,6 @@ logs/
 # OS specific
 .DS_Store
 Thumbs.db
+
+# Test Repo Folder
+chess-rogue/

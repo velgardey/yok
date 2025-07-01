@@ -14,7 +14,7 @@ The project consists of three main components:
 
 The services are deployed on Render:
 - API: https://api.yok.ninja
-- Reverse Proxy: https://yok.ninja
+- Reverse Proxy: https://*.yok.ninja
 
 ## Keep-Alive Workflow
 
@@ -42,6 +42,53 @@ To run the services locally:
 ```bash
 docker-compose up
 ```
+
+## CLI Tool
+
+The Yok CLI is a developer tool for easily deploying web applications to share with others. It combines Git workflow with deployment.
+
+### Installation
+
+```bash
+# Clone the repository
+git clone https://github.com/yourusername/yok.git
+
+# Build the CLI tool
+cd yok/cli
+go build
+
+# Copy the CLI to your path
+sudo cp yok /usr/local/bin/
+```
+
+### Commands
+
+- **`yok create`** - Create a new project on Yok
+- **`yok deploy`** - Deploy your project to the web
+- **`yok ship`** - Commit, push, and deploy in one command
+- **`yok status [deploymentId]`** - Check deployment status
+- **`yok list`** - List all deployments for your project
+- **`yok cancel [deploymentId]`** - Cancel a running deployment
+- **`yok reset`** - Reset stored project configuration
+
+The CLI also acts as a Git wrapper, allowing you to use standard Git commands:
+
+```bash
+yok add .
+yok commit -m "Your message"
+yok push
+```
+
+### Features
+
+- **Real-time Deployment Status**: Monitor deployment progress with live status updates
+- **Local/Remote Sync Check**: Ensures your local changes match the remote before deployment
+- **Deployment Management**: List, check status, and cancel deployments as needed
+- **Interactive UI**: User-friendly prompts and color-coded output
+- **Git Integration**: Seamless integration with Git workflow
+- **Project Management**: Create and manage projects for deployment
+
+The tool is designed to be simple, making it easy for developers to quickly share their work without dealing with complex deployment processes.
 
 ## Environment Variables
 

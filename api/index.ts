@@ -254,14 +254,14 @@ const updateDeploymentStatus = async (deploymentId: string, log: string) => {
             data: { status: 'IN_PROGRESS' }
         });
         console.log(`Updated deployment ${deploymentId} to IN_PROGRESS`);
-    } else if (log === 'UploadedBuild process completed with exit code 0') {
+    } else if (log.includes('Build output uploaded to S3 successfully')) {
         await prisma.deployment.update({
             where: { id: deploymentId },
             data: { status: 'COMPLETED' }
         });
         
         console.log(`Updated deployment ${deploymentId} to COMPLETED`);
-    } else if (log.includes('error')) {
+    } else if (log.toLowerCase().includes('error') || log.toLowerCase().includes('failed')) {
         await prisma.deployment.update({
             where: { id: deploymentId },
             data: { status: 'FAILED' }
@@ -369,6 +369,275 @@ app.get('/health', (req: Request, res: Response) => {
         status: 'ok'
     });
 })
+
+// Create GET /project endpoint to list all projects
+app.get('/project', async (req: Request, res: Response) => {
+    try {
+        const projects = await prisma.project.findMany({
+            orderBy: {
+                createdAt: 'desc'
+            }
+        });
+        
+        res.status(200).json({
+            status: 'success',
+            data: {
+                projects
+            }
+        });
+    } catch (error) {
+        console.error('Error fetching projects:', error);
+        res.status(500).json({
+            status: 'error',
+            message: 'Failed to fetch projects'
+        });
+    }
+})
+
+// Create GET /project/check endpoint to check if a project exists by name
+app.get('/project/check', async (req: Request, res: Response) => {
+    // Validate request query params with zod for project name
+    const schema = z.object({
+        name: z.string().min(1)
+    });
+    const safeData = schema.safeParse(req.query);
+    if (!safeData.success) {
+        res.status(400).json({
+            status: 'error',
+            message: safeData.error.message
+        });
+        return;
+    }
+    
+    const { name } = safeData.data;
+    
+    try {
+        const project = await prisma.project.findFirst({
+            where: {
+                name: name
+            }
+        });
+        
+        if (project) {
+            res.status(200).json({
+                status: 'success',
+                data: {
+                    exists: true,
+                    project
+                }
+            });
+        } else {
+            res.status(200).json({
+                status: 'success',
+                data: {
+                    exists: false
+                }
+            });
+        }
+    } catch (error) {
+        console.error('Error checking project existence:', error);
+        res.status(500).json({
+            status: 'error',
+            message: 'Failed to check project existence'
+        });
+    }
+})
+
+// Add endpoint to get deployment status
+app.get('/deployment/:id', async (req: Request, res: Response) => {
+    const schema = z.object({
+        id: z.string().uuid()
+    });
+    const safeData = schema.safeParse(req.params);
+    if (!safeData.success) {
+        res.status(400).json({
+            status: 'error',
+            message: safeData.error.message
+        });
+        return;
+    }
+    
+    const { id } = safeData.data;
+    
+    try {
+        const deployment = await prisma.deployment.findUnique({
+            where: {
+                id
+            }
+        });
+        
+        if (!deployment) {
+            res.status(404).json({
+                status: 'error',
+                message: 'Deployment not found'
+            });
+            return;
+        }
+        
+        res.status(200).json({
+            status: 'success',
+            data: {
+                deployment
+            }
+        });
+    } catch (error) {
+        console.error('Error fetching deployment status:', error);
+        res.status(500).json({
+            status: 'error',
+            message: 'Failed to fetch deployment status'
+        });
+    }
+});
+
+// Add endpoint to list deployments for a project
+app.get('/project/:id/deployments', async (req: Request, res: Response) => {
+    const schema = z.object({
+        id: z.string().uuid()
+    });
+    const safeData = schema.safeParse(req.params);
+    if (!safeData.success) {
+        res.status(400).json({
+            status: 'error',
+            message: safeData.error.message
+        });
+        return;
+    }
+    
+    const { id } = safeData.data;
+    
+    try {
+        const deployments = await prisma.deployment.findMany({
+            where: {
+                projectId: id
+            },
+            orderBy: {
+                createdAt: 'desc'
+            }
+        });
+        
+        res.status(200).json({
+            status: 'success',
+            data: {
+                deployments
+            }
+        });
+    } catch (error) {
+        console.error('Error fetching deployments:', error);
+        res.status(500).json({
+            status: 'error',
+            message: 'Failed to fetch deployments'
+        });
+    }
+});
+
+// Add endpoint to get project by ID
+app.get('/project/:id', async (req: Request, res: Response) => {
+    const schema = z.object({
+        id: z.string().uuid()
+    });
+    const safeData = schema.safeParse(req.params);
+    if (!safeData.success) {
+        res.status(400).json({
+            status: 'error',
+            message: safeData.error.message
+        });
+        return;
+    }
+    
+    const { id } = safeData.data;
+    
+    try {
+        const project = await prisma.project.findUnique({
+            where: {
+                id
+            }
+        });
+        
+        if (!project) {
+            res.status(404).json({
+                status: 'error',
+                message: 'Project not found'
+            });
+            return;
+        }
+        
+        res.status(200).json({
+            status: 'success',
+            data: {
+                project
+            }
+        });
+    } catch (error) {
+        console.error('Error fetching project:', error);
+        res.status(500).json({
+            status: 'error',
+            message: 'Failed to fetch project'
+        });
+    }
+});
+
+// Add endpoint to cancel a deployment
+app.post('/deployment/:id/cancel', async (req: Request, res: Response) => {
+    const schema = z.object({
+        id: z.string().uuid()
+    });
+    const safeData = schema.safeParse(req.params);
+    if (!safeData.success) {
+        res.status(400).json({
+            status: 'error',
+            message: safeData.error.message
+        });
+        return;
+    }
+    
+    const { id } = safeData.data;
+    
+    try {
+        const deployment = await prisma.deployment.findUnique({
+            where: {
+                id
+            }
+        });
+        
+        if (!deployment) {
+            res.status(404).json({
+                status: 'error',
+                message: 'Deployment not found'
+            });
+            return;
+        }
+        
+        // Only allow cancellation for pending/queued/in-progress deployments
+        if (deployment.status !== 'PENDING' && deployment.status !== 'QUEUED' && deployment.status !== 'IN_PROGRESS') {
+            res.status(400).json({
+                status: 'error',
+                message: `Cannot cancel deployment with status ${deployment.status}`
+            });
+            return;
+        }
+        
+        // Update deployment status to FAILED
+        await prisma.deployment.update({
+            where: {
+                id
+            },
+            data: {
+                status: 'FAILED'
+            }
+        });
+        
+        res.status(200).json({
+            status: 'success',
+            message: 'Deployment cancelled successfully'
+        });
+    } catch (error) {
+        console.error('Error cancelling deployment:', error);
+        res.status(500).json({
+            status: 'error',
+            message: 'Failed to cancel deployment'
+        });
+    }
+});
 
 app.listen(port, async () => {
     console.log(`Server is running on port ${port}`);
