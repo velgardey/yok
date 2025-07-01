@@ -1,9 +1,0 @@
-{
-  "version": 2,
-  "routes": [
-    {
-      "src": "/install.ps1",
-      "headers": { "Content-Type": "text/plain; charset=utf-8" }
-    }
-  ]
-} 
