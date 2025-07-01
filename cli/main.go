@@ -821,20 +821,25 @@ func getProject(projectID string) (*Project, error) {
 
 // followDeploymentStatus follows the status of a deployment until completion or failure
 func followDeploymentStatus(deploymentID string, deploymentURL string, projectID string) {
-	s := startSpinner("Waiting for deployment to complete...")
+	// Create spinner with specific configuration to prevent clearing previous lines
+	s := spinner.New(spinner.CharSets[25], 700*time.Millisecond)
+	s.Suffix = " Waiting for deployment to complete..."
+	s.Writer = os.Stdout
+	s.FinalMSG = "" // No final message - we'll print our own
+	s.Start()
 
 	for {
 		time.Sleep(3 * time.Second) // Check every 3 seconds
 
 		status, err := getDeploymentStatus(deploymentID)
 		if err != nil {
-			stopSpinner(s)
-			warnColor.Printf("Failed to get deployment status: %v\n", err)
+			s.Stop()
+			warnColor.Printf("\nFailed to get deployment status: %v\n", err)
 			break
 		}
 
 		if status.Status == "COMPLETED" {
-			stopSpinner(s)
+			s.Stop()
 			successColor.Printf("\n✅ Deployment completed successfully!\n")
 
 			// Try to get the project slug for a nicer URL
@@ -849,7 +854,7 @@ func followDeploymentStatus(deploymentID string, deploymentURL string, projectID
 			}
 			break
 		} else if status.Status == "FAILED" {
-			stopSpinner(s)
+			s.Stop()
 			errorColor.Printf("\n❌ Deployment failed\n")
 			break
 		}
@@ -992,25 +997,9 @@ func main() {
 			handleError(err, "Error deploying project")
 
 			successColor.Printf("✅ Deployment triggered: %s\n", deployment.Data.DeploymentId)
-			infoColor.Printf("ℹ️ Your site will be available at: %s\n", deployment.Data.DeploymentUrl)
 
-			// Try to get the project for slug URL
-			project, err := getProject(config.ProjectID)
-			if err == nil && project.Slug != "" {
-				infoColor.Printf("ℹ️ Your site will also be available at: https://%s.yok.ninja\n", project.Slug)
-			}
-
-			// Ask if the user wants to follow the deployment status
-			followStatus := false
-			statusPrompt := &survey.Confirm{
-				Message: "Do you want to follow the deployment status?",
-				Default: true,
-			}
-			survey.AskOne(statusPrompt, &followStatus)
-
-			if followStatus {
-				followDeploymentStatus(deployment.Data.DeploymentId, deployment.Data.DeploymentUrl, config.ProjectID)
-			}
+			// Automatically follow the deployment status
+			followDeploymentStatus(deployment.Data.DeploymentId, deployment.Data.DeploymentUrl, config.ProjectID)
 		},
 	}
 
@@ -1067,25 +1056,9 @@ func main() {
 			handleError(err, "Error deploying project")
 
 			successColor.Printf("✅ Deployment triggered: %s\n", deployment.Data.DeploymentId)
-			infoColor.Printf("ℹ️ Your site will be available at: %s\n", deployment.Data.DeploymentUrl)
 
-			// Try to get the project for slug URL
-			project, err := getProject(config.ProjectID)
-			if err == nil && project.Slug != "" {
-				infoColor.Printf("ℹ️ Your site will also be available at: https://%s.yok.ninja\n", project.Slug)
-			}
-
-			// Ask if the user wants to follow the deployment status
-			followStatus := false
-			followPrompt := &survey.Confirm{
-				Message: "Do you want to follow the deployment status?",
-				Default: true,
-			}
-			survey.AskOne(followPrompt, &followStatus)
-
-			if followStatus {
-				followDeploymentStatus(deployment.Data.DeploymentId, deployment.Data.DeploymentUrl, config.ProjectID)
-			}
+			// Automatically follow the deployment status
+			followDeploymentStatus(deployment.Data.DeploymentId, deployment.Data.DeploymentUrl, config.ProjectID)
 		},
 	}
 

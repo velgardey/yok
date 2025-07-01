@@ -12,85 +12,223 @@ The project consists of three main components:
 
 ## Deployment
 
-The services are deployed on Render:
+The services are deployed on:
 - API: https://api.yok.ninja
 - Reverse Proxy: https://*.yok.ninja
 
-## Keep-Alive Workflow
-
-To prevent the services from sleeping on Render's free tier, a GitHub Actions workflow pings the services every 5 minutes.
-
-### How it works
-
-1. The workflow is defined in `.github/workflows/keep-alive.yml`
-2. It runs every 5 minutes using GitHub's scheduled actions
-3. It pings both the API and reverse proxy services
-4. It logs the status of each service
-
-### Notifications (Optional)
-
-To receive notifications when services are down:
-
-1. Set up a webhook URL (e.g., Slack, Discord, or custom endpoint)
-2. Add the webhook URL as a secret named `WEBHOOK_URL` in your GitHub repository settings
-3. Uncomment the notification step in the workflow file
-
-## Local Development
-
-To run the services locally:
-
-```bash
-docker-compose up
-```
-
 ## CLI Tool
 
-The Yok CLI is a developer tool for easily deploying web applications to share with others. It combines Git workflow with deployment.
+The Yok CLI is a powerful Git wrapper and deployment tool that allows you to deploy your static web applications directly from your Git repository. With Yok, you can quickly share your projects with others without dealing with complex deployment processes.
 
-### Installation
+## Installation
 
-#### Linux / macOS
+### Linux / macOS
+
 ```bash
 curl -fsSL https://get.yok.ninja/install.sh | bash
 ```
 
-#### Windows (PowerShell)
+### Windows (PowerShell)
+
 ```powershell
 iwr -useb https://get.yok.ninja/install.ps1 | iex
 ```
 
-#### Manual Installation
-You can download the appropriate binary for your platform from the [GitHub releases page](https://github.com/velgardey/yok/releases).
+### Manual Installation
 
-### Commands
+1. Download the appropriate binary for your platform from the [GitHub releases page](https://github.com/velgardey/yok/releases).
+2. Extract the archive if necessary
+3. Move the binary to a location in your PATH:
+   - Linux/macOS: `/usr/local/bin` or `~/bin`
+   - Windows: Create a folder and add it to your PATH environment variable
 
-- **`yok create`** - Create a new project on Yok
-- **`yok deploy`** - Deploy your project to the web
-- **`yok ship`** - Commit, push, and deploy in one command
-- **`yok status [deploymentId]`** - Check deployment status
-- **`yok list`** - List all deployments for your project
-- **`yok cancel [deploymentId]`** - Cancel a running deployment
-- **`yok reset`** - Reset stored project configuration
+To verify your installation, run:
 
-The CLI also acts as a Git wrapper, allowing you to use standard Git commands:
+```bash
+yok version
+```
+
+## Getting Started
+
+To use Yok CLI, navigate to your project directory in the terminal:
+
+```bash
+cd path/to/your/project
+```
+
+### First-time Setup
+
+1. Ensure your project is a Git repository. If not, initialize one:
+
+   ```bash
+   yok init
+   ```
+
+2. Create a new project on Yok:
+
+   ```bash
+   yok create
+   ```
+
+   You'll be prompted to enter a name for your project and specify how to handle the Git repository (auto-detect or manual entry).
+
+## Commands
+
+### Project Management
+
+#### `yok create`
+
+Creates a new project on Yok.
+
+```bash
+yok create
+```
+
+- You'll be asked to provide a project name
+- The tool will check if a project with that name already exists
+- You can choose to auto-detect the Git repository from the current directory or manually enter a Git URL
+- The framework will be automatically detected based on your project files
+
+#### `yok reset-config`
+
+Resets stored project configuration.
+
+```bash
+yok reset-config
+```
+
+### Deployment
+
+#### `yok deploy`
+
+Deploys your project to the web using Yok.
+
+```bash
+yok deploy
+```
+
+- Checks if your local branch is in sync with the remote
+- Handles uncommitted changes if any exist
+- Deploys the project and shows real-time deployment status
+- Provides the URL where your site is available once deployment completes
+
+#### `yok ship`
+
+Commits, pushes, and deploys your project in one command.
+
+```bash
+yok ship
+```
+
+- Prompts for a commit message
+- Adds all changes, commits them, and pushes to the remote
+- Deploys the project and shows real-time deployment status
+- Provides the URL where your site is available once deployment completes
+
+### Deployment Management
+
+#### `yok status [deploymentId]`
+
+Checks the status of a deployment.
+
+```bash
+yok status
+# OR
+yok status abc123def
+```
+
+- If no deployment ID is provided, you'll be prompted to select from recent deployments
+- Shows detailed status information including creation time and last update
+
+#### `yok list`
+
+Lists all deployments for your project.
+
+```bash
+yok list
+```
+
+- Displays a table with deployment IDs, statuses, and creation times
+- Color-coded statuses for easy identification
+
+#### `yok cancel [deploymentId]`
+
+Cancels a running deployment.
+
+```bash
+yok cancel
+# OR
+yok cancel abc123def
+```
+
+- If no deployment ID is provided, you'll be prompted to select from in-progress deployments
+- Requires confirmation before cancellation
+
+### Git Integration
+
+Yok CLI acts as a Git wrapper, allowing you to use standard Git commands:
 
 ```bash
 yok add .
 yok commit -m "Your message"
 yok push
+yok pull
+yok checkout -b new-branch
+yok branch
+yok status
+yok log
+# and many more
 ```
 
-### Features
+All standard Git commands are supported, making Yok a seamless part of your Git workflow.
 
-- **Real-time Deployment Status**: Monitor deployment progress with live status updates
-- **Local/Remote Sync Check**: Ensures your local changes match the remote before deployment
-- **Deployment Management**: List, check status, and cancel deployments as needed
-- **Interactive UI**: User-friendly prompts and color-coded output
-- **Git Integration**: Seamless integration with Git workflow
-- **Project Management**: Create and manage projects for deployment
+## Features
 
-The tool is designed to be simple, making it easy for developers to quickly share their work without dealing with complex deployment processes.
+### Real-time Deployment Status
 
-## Environment Variables
+Monitor deployment progress with live status updates. The CLI will automatically follow the deployment process and notify you when it completes or fails.
 
-The services require several environment variables to be set. See `.env` for the required variables. 
+### Local/Remote Sync Check
+
+Before deployment, Yok checks if your local repository is in sync with the remote:
+- Detects if you're behind or ahead of the remote
+- Identifies uncommitted changes
+- Offers to commit and push changes before deploying
+
+### Interactive UI
+
+- User-friendly prompts for all necessary inputs
+- Color-coded output for better readability
+- Spinners to indicate ongoing operations
+
+### Project Management
+
+- Create and manage projects for deployment
+- Projects are linked to Git repositories
+- Framework auto-detection for optimal deployment settings
+
+### Custom Domains
+
+Once deployed, your site will be available at:
+- `https://[project-slug].yok.ninja`
+- A unique deployment URL for each deployment
+
+## Troubleshooting
+
+### Common Issues
+
+1. **"No project configured"**
+   - Run `yok create` to set up a project
+
+2. **"Failed to check if behind/ahead of remote"**
+   - Ensure your Git repository has a remote set up
+   - Run `git remote -v` to verify
+
+3. **"You have uncommitted changes"**
+   - Commit your changes with `yok ship` or
+   - Use `yok deploy` and follow the prompts to handle uncommitted changes
+
+4. **"Failed to deploy project"**
+   - Check your internet connection
+   - Verify your Git repository is accessible
+
