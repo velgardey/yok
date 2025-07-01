@@ -15,7 +15,8 @@ builds:
       - -s -w -X main.version={{.Version}}
 
 archives:
-  - format: tar.gz
+  - id: default
+    format: tar.gz
     format_overrides:
       - goos: windows
         format: zip
@@ -35,4 +36,4 @@ changelog:
   filters:
     exclude:
       - '^docs:'
-      - '^test:' 
+      - '^test:'
