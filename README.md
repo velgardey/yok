@@ -49,17 +49,18 @@ The Yok CLI is a developer tool for easily deploying web applications to share w
 
 ### Installation
 
+#### Linux / macOS
 ```bash
-# Clone the repository
-git clone https://github.com/yourusername/yok.git
-
-# Build the CLI tool
-cd yok/cli
-go build
-
-# Copy the CLI to your path
-sudo cp yok /usr/local/bin/
+curl -fsSL https://get.yok.ninja/install.sh | bash
 ```
+
+#### Windows (PowerShell)
+```powershell
+iwr -useb https://get.yok.ninja/install.ps1 | iex
+```
+
+#### Manual Installation
+You can download the appropriate binary for your platform from the [GitHub releases page](https://github.com/velgardey/yok/releases).
 
 ### Commands
 

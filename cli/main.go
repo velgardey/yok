@@ -20,6 +20,9 @@ import (
 	"github.com/spf13/cobra"
 )
 
+// Version will be injected at build time by GoReleaser
+var version = "dev"
+
 // Define colors
 var (
 	infoColor    = color.New(color.FgCyan)
@@ -1399,6 +1402,16 @@ func main() {
 	// Add commands to root
 	rootCmd.AddCommand(deployCmd, shipCmd, createCmd, resetCmd, resetConfigCmd, fallbackCmd,
 		statusCmd, listCmd, cancelCmd)
+
+	// Add version command
+	var versionCmd = &cobra.Command{
+		Use:   "version",
+		Short: "Print the version number of Yok CLI",
+		Run: func(cmd *cobra.Command, args []string) {
+			fmt.Printf("Yok CLI v%s\n", version)
+		},
+	}
+	rootCmd.AddCommand(versionCmd)
 
 	// Set up special handling for unknown commands to pass them to git
 	rootCmd.SetFlagErrorFunc(func(cmd *cobra.Command, err error) error {
