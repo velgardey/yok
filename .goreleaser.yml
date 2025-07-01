@@ -8,15 +8,14 @@ builds:
     goarch:
       - amd64
       - arm64
-    main: .
+    main: ./main.go
     binary: yok
     dir: ./cli
     ldflags:
       - -s -w -X main.version={{.Version}}
 
 archives:
-  - id: default
-    format: tar.gz
+  - format: tar.gz
     format_overrides:
       - goos: windows
         format: zip
@@ -24,6 +23,7 @@ archives:
     files:
       - LICENSE
       - README.md
+    allow_different_binary_count: true
 
 checksum:
   name_template: 'checksums.txt'
