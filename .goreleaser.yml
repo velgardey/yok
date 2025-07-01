@@ -8,8 +8,9 @@ builds:
     goarch:
       - amd64
       - arm64
-    main: ./cli/main.go
+    main: .
     binary: yok
+    dir: ./cli
     ldflags:
       - -s -w -X main.version={{.Version}}
 
