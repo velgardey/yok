@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"runtime"
 	"strings"
+	"time"
 
 	"github.com/AlecAivazis/survey/v2"
 	"github.com/blang/semver"
@@ -193,74 +194,114 @@ func isRunningWithSudo() bool {
 // runUpdateWithElevation executes the update with appropriate elevation (sudo on Unix, UAC on Windows)
 func runUpdateWithElevation(execPath string, latest *selfupdate.Release) error {
 	if runtime.GOOS == "windows" {
-		// For Windows, prepare a PowerShell command to download and install the update
+		// For Windows, we need to use a different approach since we can't replace a running binary
+		// Create a temporary batch file that will:
+		// 1. Wait for our process to exit
+		// 2. Download and replace the binary
+		// 3. Restart the binary if needed
 		tmpDir := os.TempDir()
-		scriptPath := filepath.Join(tmpDir, "yok_update.ps1")
+		updateBatchPath := filepath.Join(tmpDir, "yok_update.bat")
 
-		// Create a PowerShell script that will:
-		// 1. Download the latest release
-		// 2. Stop the current process (if needed)
-		// 3. Replace the binary
-		// 4. Set appropriate permissions
-		script := fmt.Sprintf(`
-$ErrorActionPreference = "Stop"
-Write-Host "Downloading update from %s..."
-$webClient = New-Object System.Net.WebClient
-$tempFile = [System.IO.Path]::GetTempFileName()
-$webClient.DownloadFile("%s", $tempFile)
+		// Get our process ID
+		pid := os.Getpid()
 
-# Ensure the target directory exists
-$targetDir = [System.IO.Path]::GetDirectoryName("%s")
-if (!(Test-Path $targetDir)) {
-    New-Item -ItemType Directory -Force -Path $targetDir
-}
+		// Create batch file content
+		batchContent := fmt.Sprintf(`@echo off
+echo Waiting for Yok CLI to exit (PID: %d)...
+timeout /t 1 /nobreak > nul
+tasklist | find " %d " > nul
+if not errorlevel 1 goto wait
 
-# Replace the binary
-Write-Host "Installing update to %s..."
-Copy-Item -Force $tempFile "%s"
-Remove-Item $tempFile
+echo Downloading update from %s...
+powershell -Command "$webClient = New-Object System.Net.WebClient; $webClient.DownloadFile('%s', '%s.new')"
+if errorlevel 1 (
+    echo Failed to download update.
+    exit /b 1
+)
 
-Write-Host "✅ Yok CLI has been updated successfully!"
-`, latest.URL, latest.AssetURL, execPath, execPath, execPath)
+echo Installing update...
+move /y "%s.new" "%s"
+if errorlevel 1 (
+    echo Failed to replace binary. Please try again with administrator privileges.
+    exit /b 1
+)
 
-		if err := os.WriteFile(scriptPath, []byte(script), 0700); err != nil {
+echo.
+echo ✅ Yok CLI has been updated to %s successfully!
+echo Run 'yok version' to verify the update.
+`, pid, pid, latest.URL, latest.AssetURL, execPath, execPath, execPath, latest.Version)
+
+		// Write the batch file
+		if err := os.WriteFile(updateBatchPath, []byte(batchContent), 0700); err != nil {
 			return fmt.Errorf("failed to create update script: %v", err)
 		}
-		defer os.Remove(scriptPath)
 
-		// Run the script with elevation
-		psCmd := fmt.Sprintf("Start-Process -Verb RunAs -FilePath powershell -ArgumentList '-ExecutionPolicy', 'Bypass', '-File', '\"%s\"'", scriptPath)
-		cmd := exec.Command("powershell", "-Command", psCmd)
-		cmd.Stdin = os.Stdin
-		cmd.Stdout = os.Stdout
-		cmd.Stderr = os.Stderr
-		return cmd.Run()
+		// Start the batch file in a new process and exit our process
+		cmd := exec.Command("cmd", "/c", "start", "cmd", "/c", updateBatchPath)
+		if err := cmd.Start(); err != nil {
+			os.Remove(updateBatchPath)
+			return fmt.Errorf("failed to start update process: %v", err)
+		}
+
+		// Inform the user
+		utils.InfoColor.Println("Update process has started in a new window.")
+		fmt.Println("Please wait while the update completes...")
+		fmt.Println("This window will close automatically.")
+
+		// Exit after a short delay
+		time.Sleep(1 * time.Second)
+		os.Exit(0)
+		return nil
 	} else {
-		// For Unix systems, use sudo
+		// For Unix systems (Linux/macOS)
 		utils.InfoColor.Println("This operation requires elevated privileges.")
-		fmt.Println("You may be prompted for your password.")
+		fmt.Println("You will be prompted for your password.")
 
-		// Create a temporary script to perform the update
+		// Check if we can run sudo without a password prompt first
+		sudoTestCmd := exec.Command("sudo", "-n", "true")
+		sudoTestCmd.Stderr = nil
+		sudoNoPasswd := (sudoTestCmd.Run() == nil)
+
+		// Get the absolute path to the current binary
+		execPath, err := filepath.Abs(execPath)
+		if err != nil {
+			return fmt.Errorf("failed to get absolute path: %v", err)
+		}
+
+		// Create a temporary script for the update
 		tmpDir := os.TempDir()
 		scriptPath := filepath.Join(tmpDir, "yok_update.sh")
 
 		// Write the update script
 		script := fmt.Sprintf(`#!/bin/bash
 set -e
+
 echo "Downloading update from %s..."
-sudo curl -L -o "%s" "%s"
-sudo chmod +x "%s"
+curl -L -o "%s.new" "%s"
+chmod +x "%s.new"
+
+echo "Installing update..."
+mv "%s.new" "%s"
+
 echo "✅ Yok CLI has been updated to %s successfully!"
 echo "Run 'yok version' to verify the update."
-`, latest.URL, execPath, latest.AssetURL, execPath, latest.Version)
+`, latest.URL, execPath, latest.AssetURL, execPath, execPath, execPath, latest.Version)
 
 		if err := os.WriteFile(scriptPath, []byte(script), 0700); err != nil {
 			return fmt.Errorf("failed to create update script: %v", err)
 		}
 		defer os.Remove(scriptPath)
 
-		// Run the script
-		cmd := exec.Command("bash", scriptPath)
+		// If sudo requires password, inform the user they need to use sudo directly
+		if !sudoNoPasswd {
+			utils.InfoColor.Println("Your system requires a password for sudo operations.")
+			utils.InfoColor.Println("Please run the following command to update:")
+			fmt.Printf("\n    sudo yok self-update --force\n\n")
+			return fmt.Errorf("please run the update with sudo")
+		}
+
+		// Run the script with sudo
+		cmd := exec.Command("sudo", "bash", scriptPath)
 		cmd.Stdin = os.Stdin
 		cmd.Stdout = os.Stdout
 		cmd.Stderr = os.Stderr
@@ -270,6 +311,30 @@ echo "Run 'yok version' to verify the update."
 
 // runSelfUpdate implements the update logic
 func runSelfUpdate(cmd *cobra.Command, force bool, checkOnly bool) error {
+	// Check if we're already running with sudo
+	sudoMode := isRunningWithSudo()
+	sudoFlag, _ := cmd.Flags().GetBool("sudo-mode")
+
+	// If we're on Unix and not running with sudo, and not in sudo mode flag
+	if (runtime.GOOS == "linux" || runtime.GOOS == "darwin") && !sudoMode && !sudoFlag {
+		// Check if we need sudo by trying to write to the binary location
+		execPath, err := os.Executable()
+		if err == nil {
+			execPath, err = filepath.EvalSymlinks(execPath)
+			if err == nil {
+				if !hasWritePermission(execPath) {
+					utils.InfoColor.Println("This operation requires elevated privileges.")
+					forceFlag := ""
+					if force {
+						forceFlag = " --force"
+					}
+					fmt.Println("Please run: sudo yok self-update" + forceFlag)
+					return fmt.Errorf("please run with sudo")
+				}
+			}
+		}
+	}
+
 	spinner := utils.StartSpinner("Checking for updates...")
 	latest, hasUpdate, err := checkForUpdates()
 	utils.StopSpinner(spinner)
@@ -352,10 +417,9 @@ func runSelfUpdate(cmd *cobra.Command, force bool, checkOnly bool) error {
 	targetPath := filepath.Join(installDir, targetName)
 
 	// Check if we have permission to update the binary
-	if !hasWritePermission(targetPath) && !isRunningWithSudo() {
+	if !hasWritePermission(targetPath) && !sudoMode {
 		// We don't have permission, try to run with elevation
-		sudoMode, _ := cmd.Flags().GetBool("sudo-mode")
-		if sudoMode {
+		if sudoFlag {
 			// We're already trying to elevate, but still don't have permission
 			return fmt.Errorf("failed to get write permission even with elevated privileges")
 		}
@@ -385,6 +449,11 @@ func runSelfUpdate(cmd *cobra.Command, force bool, checkOnly bool) error {
 		} else {
 			utils.InfoColor.Printf("Created backup at: %s\n", backupPath)
 		}
+	}
+
+	// Special handling for Windows as we can't replace a running binary
+	if runtime.GOOS == "windows" {
+		return runUpdateWithElevation(execPath, latest)
 	}
 
 	// Run update
