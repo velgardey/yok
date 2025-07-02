@@ -10,6 +10,8 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
+	"strconv"
 	"strings"
 	"time"
 
@@ -99,6 +101,13 @@ type DeploymentStatusResponse struct {
 	Data   struct {
 		Deployment Deployment `json:"deployment"`
 	} `json:"data"`
+}
+
+// GitHub release information
+type GitHubRelease struct {
+	TagName    string `json:"tag_name"`
+	Name       string `json:"name"`
+	Prerelease bool   `json:"prerelease"`
 }
 
 // Execute git commands
@@ -948,6 +957,248 @@ func handleUncommittedChanges() error {
 	return nil
 }
 
+// Get the latest release info from GitHub
+func getLatestRelease() (*GitHubRelease, error) {
+	// Repository info
+	const repoName = "velgardey/yok"
+	const apiURLTemplate = "https://api.github.com/repos/%s/releases/latest"
+	apiURL := fmt.Sprintf(apiURLTemplate, repoName)
+
+	// Create request with proper headers
+	req, err := http.NewRequest("GET", apiURL, nil)
+	if err != nil {
+		return nil, fmt.Errorf("error creating request: %v", err)
+	}
+
+	// Set user agent to avoid GitHub API rate limits
+	req.Header.Set("User-Agent", "Yok-CLI-Updater")
+
+	// Send the request
+	resp, err := httpClient.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("network error: %v", err)
+	}
+	defer resp.Body.Close()
+
+	// Handle HTTP status codes
+	switch resp.StatusCode {
+	case http.StatusOK:
+		// Continue processing
+	case http.StatusNotFound:
+		return nil, fmt.Errorf("no releases found for %s", repoName)
+	case http.StatusForbidden:
+		return nil, fmt.Errorf("rate limit exceeded, please try again later")
+	default:
+		return nil, fmt.Errorf("GitHub API returned status code: %d", resp.StatusCode)
+	}
+
+	// Read and parse response body
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, fmt.Errorf("error reading response body: %v", err)
+	}
+
+	var release GitHubRelease
+	if err := json.Unmarshal(body, &release); err != nil {
+		return nil, fmt.Errorf("error parsing GitHub response: %v", err)
+	}
+
+	// Validate response
+	if release.TagName == "" {
+		return nil, fmt.Errorf("received empty tag name from GitHub")
+	}
+
+	return &release, nil
+}
+
+// Compare version strings to check if latest is newer than current
+// Returns true if latest version is newer than current version
+func compareVersions(current, latest string) bool {
+	// Strip 'v' prefix if present
+	current = strings.TrimPrefix(current, "v")
+	latest = strings.TrimPrefix(latest, "v")
+
+	// Special case handling
+	switch {
+	case current == "dev" || current == "development":
+		return true // Always update development versions
+	case latest == "":
+		return false // Can't update to empty version
+	case current == "":
+		return true // Empty current version should update
+	}
+
+	// Parse versions into components
+	currentParts := strings.Split(current, ".")
+	latestParts := strings.Split(latest, ".")
+
+	// Compare each version component
+	maxLen := len(currentParts)
+	if len(latestParts) > maxLen {
+		maxLen = len(latestParts)
+	}
+
+	for i := 0; i < maxLen; i++ {
+		// If we run out of parts in one version, that version is older
+		if i >= len(currentParts) {
+			return true // Latest has more parts, so it's newer
+		}
+		if i >= len(latestParts) {
+			return false // Current has more parts, so it's newer
+		}
+
+		// Try to compare as integers
+		currentNum, currentErr := strconv.Atoi(currentParts[i])
+		latestNum, latestErr := strconv.Atoi(latestParts[i])
+
+		if currentErr == nil && latestErr == nil {
+			// Both are numeric, compare as numbers
+			if latestNum > currentNum {
+				return true
+			}
+			if latestNum < currentNum {
+				return false
+			}
+			// Equal components, continue to next component
+		} else {
+			// At least one is non-numeric, compare as strings
+			if currentParts[i] != latestParts[i] {
+				return latestParts[i] > currentParts[i]
+			}
+			// Equal components, continue to next component
+		}
+	}
+
+	// All components equal
+	return false
+}
+
+// Platform-specific update logic
+func updateBinary() error {
+	// Repository info
+	const repoName = "velgardey/yok"
+
+	// Get architecture
+	arch := runtime.GOARCH
+	switch arch {
+	case "amd64", "arm64":
+		// These architectures are supported
+	default:
+		return fmt.Errorf("unsupported architecture: %s", arch)
+	}
+
+	// Create command based on OS
+	var cmd *exec.Cmd
+
+	switch runtime.GOOS {
+	case "windows":
+		// Check if PowerShell is available
+		if _, err := exec.LookPath("powershell"); err != nil {
+			return fmt.Errorf("PowerShell is required for updates on Windows: %v", err)
+		}
+
+		scriptURL := fmt.Sprintf("https://raw.githubusercontent.com/%s/main/scripts/install.ps1", repoName)
+		cmd = exec.Command("powershell", "-ExecutionPolicy", "Bypass", "-Command",
+			fmt.Sprintf("Invoke-Expression ((New-Object System.Net.WebClient).DownloadString('%s'))", scriptURL))
+
+	case "darwin", "linux":
+		// Check for required tools
+		if _, err := exec.LookPath("curl"); err != nil {
+			return fmt.Errorf("curl is required for updates: %v", err)
+		}
+
+		if _, err := exec.LookPath("bash"); err != nil {
+			return fmt.Errorf("bash is required for updates: %v", err)
+		}
+
+		scriptURL := fmt.Sprintf("https://raw.githubusercontent.com/%s/main/scripts/install.sh", repoName)
+		cmd = exec.Command("bash", "-c", fmt.Sprintf("curl -fsSL %s | bash", scriptURL))
+
+	default:
+		return fmt.Errorf("unsupported operating system: %s", runtime.GOOS)
+	}
+
+	// Connect command's stdout/stderr to our process
+	cmd.Stdout = os.Stdout
+	cmd.Stderr = os.Stderr
+
+	// Run the command
+	return cmd.Run()
+}
+
+// Add self-update command
+var selfUpdateCmd = &cobra.Command{
+	Use:   "self-update",
+	Short: "Update Yok CLI to the latest version",
+	Run: func(cmd *cobra.Command, args []string) {
+		if err := runSelfUpdate(); err != nil {
+			errorColor.Printf("%v\n", err)
+			os.Exit(1)
+		}
+	},
+}
+
+// Separate function for update logic to improve testability and readability
+func runSelfUpdate() error {
+	// Get the latest version from GitHub API
+	infoColor.Print("Checking for updates... ")
+	release, err := getLatestRelease()
+	if err != nil {
+		return fmt.Errorf("error checking for updates: %v", err)
+	}
+	fmt.Println("Done")
+
+	latestVersion := release.TagName
+
+	// Check if current version is already the latest
+	if !compareVersions(version, latestVersion) {
+		successColor.Printf("You're already using the latest version (v%s)\n", version)
+		return nil
+	}
+
+	// Display update information
+	infoColor.Printf("\nAvailable update:\n")
+	fmt.Printf("Current version: v%s\n", version)
+	fmt.Printf("Latest version: %s\n", latestVersion)
+
+	// Ask for confirmation before updating
+	updateConfirm := false
+	updatePrompt := &survey.Confirm{
+		Message: fmt.Sprintf("Do you want to update from v%s to %s?", version, latestVersion),
+		Default: true,
+	}
+	if err := survey.AskOne(updatePrompt, &updateConfirm); err != nil {
+		return fmt.Errorf("update cancelled: %v", err)
+	}
+
+	if !updateConfirm {
+		infoColor.Println("Update cancelled")
+		return nil
+	}
+
+	// Run update process
+	infoColor.Println("Updating Yok CLI...")
+
+	// Start a spinner for visual feedback
+	s := startSpinner("Downloading and installing update...")
+	err = updateBinary()
+	stopSpinner(s)
+
+	if err != nil {
+		// Show more detailed troubleshooting help
+		warnColor.Println("\nTroubleshooting tips:")
+		fmt.Println("1. Check your internet connection")
+		fmt.Println("2. Make sure you have permission to write to the installation directory")
+		fmt.Println("3. Try running with elevated privileges (sudo/admin)")
+		fmt.Printf("4. Try manual installation from: https://github.com/velgardey/yok/releases/tag/%s\n", latestVersion)
+
+		return fmt.Errorf("update failed: %v", err)
+	}
+
+	successColor.Printf("✅ Updated to version %s successfully!\n", latestVersion)
+	return nil
+}
+
 func main() {
 	var rootCmd = &cobra.Command{
 		Use:   "yok",
@@ -1329,6 +1580,15 @@ func main() {
 		},
 	}
 
+	// Add version command
+	var versionCmd = &cobra.Command{
+		Use:   "version",
+		Short: "Print the version number of Yok CLI",
+		Run: func(cmd *cobra.Command, args []string) {
+			fmt.Printf("Yok CLI v%s\n", version)
+		},
+	}
+
 	// List of common git commands
 	gitCommands := []string{
 		"add", "commit", "push", "pull", "checkout", "branch", "status",
@@ -1374,17 +1634,7 @@ func main() {
 
 	// Add commands to root
 	rootCmd.AddCommand(deployCmd, shipCmd, createCmd, resetCmd, resetConfigCmd, fallbackCmd,
-		statusCmd, listCmd, cancelCmd)
-
-	// Add version command
-	var versionCmd = &cobra.Command{
-		Use:   "version",
-		Short: "Print the version number of Yok CLI",
-		Run: func(cmd *cobra.Command, args []string) {
-			fmt.Printf("Yok CLI v%s\n", version)
-		},
-	}
-	rootCmd.AddCommand(versionCmd)
+		statusCmd, listCmd, cancelCmd, selfUpdateCmd, versionCmd)
 
 	// Set up special handling for unknown commands to pass them to git
 	rootCmd.SetFlagErrorFunc(func(cmd *cobra.Command, err error) error {
