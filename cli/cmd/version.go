@@ -12,7 +12,7 @@ var versionCmd = &cobra.Command{
 	Short: "Display the version of Yok CLI",
 	Long:  `Display the current version of Yok CLI.`,
 	Run: func(cmd *cobra.Command, args []string) {
-		fmt.Printf("yok version %s\n", version)
+		fmt.Printf("Yok CLI v%s\n", version)
 	},
 }
 

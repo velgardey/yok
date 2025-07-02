@@ -23,7 +23,7 @@ var RootCmd = &cobra.Command{
 // This is called by main.main(). It only needs to happen once to the rootCmd.
 func Execute() {
 	// Customize version template
-	RootCmd.SetVersionTemplate("{{.Name}} version {{.Version}}\n")
+	RootCmd.SetVersionTemplate("Yok CLI v{{.Version}}\n")
 
 	// Set up special handling for unknown commands to pass them to git
 	RootCmd.SetFlagErrorFunc(func(cmd *cobra.Command, err error) error {

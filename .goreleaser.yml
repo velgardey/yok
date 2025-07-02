@@ -12,7 +12,7 @@ builds:
     binary: yok
     dir: ./cli
     ldflags:
-      - -s -w -X main.version={{.Version}}
+      - -s -w -X github.com/velgardey/yok/cli/cmd.version={{.Version}}
 
 archives:
   - format: tar.gz
