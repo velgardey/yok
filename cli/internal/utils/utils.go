@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"net/http"
 	"os"
 	"strconv"
 	"strings"
@@ -26,13 +27,22 @@ const (
 	ApiURL      = "http://api.yok.ninja"
 	ConfigFile  = ".yok-config.json"
 	HttpTimeout = 30 * time.Second
+	UserAgent   = "Yok-CLI-Updater"
 )
 
-// GitHubRelease represents GitHub release information
-type GitHubRelease struct {
-	TagName    string `json:"tag_name"`
-	Name       string `json:"name"`
-	Prerelease bool   `json:"prerelease"`
+// CreateHTTPClient returns an HTTP client with appropriate timeouts and settings
+func CreateHTTPClient() *http.Client {
+	return &http.Client{
+		Timeout: HttpTimeout,
+		Transport: &http.Transport{
+			Proxy:                 http.ProxyFromEnvironment,
+			TLSHandshakeTimeout:   10 * time.Second,
+			ResponseHeaderTimeout: 10 * time.Second,
+			ExpectContinueTimeout: 1 * time.Second,
+			MaxIdleConns:          10,
+			IdleConnTimeout:       90 * time.Second,
+		},
+	}
 }
 
 // HandleError prints error messages and exits with non-zero code if err is not nil

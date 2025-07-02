@@ -13,14 +13,18 @@ var version = "dev" // Will be injected at build time by GoReleaser
 
 // RootCmd represents the base command when called without any subcommands
 var RootCmd = &cobra.Command{
-	Use:   "yok",
-	Short: "Yok CLI - Git Wrapper and Deployment Tool",
-	Long:  "Yok CLI is a git wrapper and a deployment tool that allows you to deploy your static web applications directly from your git repository.",
+	Use:     "yok",
+	Short:   "Yok CLI - Git Wrapper and Deployment Tool",
+	Long:    "Yok CLI is a git wrapper and a deployment tool that allows you to deploy your static web applications directly from your git repository.",
+	Version: version,
 }
 
 // Execute adds all child commands to the root command and sets flags appropriately.
 // This is called by main.main(). It only needs to happen once to the rootCmd.
 func Execute() {
+	// Customize version template
+	RootCmd.SetVersionTemplate("{{.Name}} version {{.Version}}\n")
+
 	// Set up special handling for unknown commands to pass them to git
 	RootCmd.SetFlagErrorFunc(func(cmd *cobra.Command, err error) error {
 		// Check if the command is a git command that we don't explicitly handle

@@ -9,13 +9,7 @@ import (
 
 	"github.com/AlecAivazis/survey/v2"
 	"github.com/go-git/go-git/v5"
-	"github.com/gookit/color"
-)
-
-// InfoColor and SuccessColor for console output
-var (
-	InfoColor    = color.New(color.FgCyan)
-	SuccessColor = color.New(color.FgGreen, color.Bold)
+	"github.com/velgardey/yok/cli/internal/utils"
 )
 
 // ExecuteCommand runs a git command and returns its output
@@ -104,12 +98,12 @@ func GetRepoInfo(useManualEntry bool) (string, string, error) {
 		}
 
 		// Add the remote URL quietly in the background
-		InfoColor.Print("Adding remote origin... ")
+		utils.InfoColor.Print("Adding remote origin... ")
 		_, err := ExecuteCommand("remote", "add", "origin", remoteURLPrompt)
 		if err != nil {
 			return "", "", fmt.Errorf("failed to add remote: %s", err)
 		}
-		SuccessColor.Println("Done")
+		utils.SuccessColor.Println("Done")
 
 		remoteURL = remoteURLPrompt
 	}
@@ -128,12 +122,12 @@ func GetRepoInfo(useManualEntry bool) (string, string, error) {
 func EnsureRepo() error {
 	_, err := os.Stat(".git")
 	if os.IsNotExist(err) {
-		InfoColor.Print("No Git repository found. Initializing... ")
+		utils.InfoColor.Print("No Git repository found. Initializing... ")
 		_, err := ExecuteCommand("init")
 		if err != nil {
 			return fmt.Errorf("failed to initialize git repo: %v", err)
 		}
-		SuccessColor.Println("Done")
+		utils.SuccessColor.Println("Done")
 	}
 	return nil
 }
@@ -221,31 +215,31 @@ func HandleUncommittedChanges() error {
 	}
 
 	// Git add
-	InfoColor.Print("📝 Adding changes... ")
+	utils.InfoColor.Print("📝 Adding changes... ")
 	_, err = ExecuteCommand("add", ".")
 	if err != nil {
 		fmt.Println()
 		return fmt.Errorf("error adding files: %v", err)
 	}
-	SuccessColor.Println("Done")
+	utils.SuccessColor.Println("Done")
 
 	// Git commit
-	InfoColor.Print("💾 Committing changes... ")
+	utils.InfoColor.Print("💾 Committing changes... ")
 	_, err = ExecuteCommand("commit", "-m", commitMessage)
 	if err != nil {
 		fmt.Println()
 		return fmt.Errorf("error committing changes: %v", err)
 	}
-	SuccessColor.Println("Done")
+	utils.SuccessColor.Println("Done")
 
 	// Git push
-	InfoColor.Print("🚀 Pushing to remote... ")
+	utils.InfoColor.Print("🚀 Pushing to remote... ")
 	_, err = ExecuteCommand("push")
 	if err != nil {
 		fmt.Println()
 		return fmt.Errorf("error pushing changes: %v", err)
 	}
-	SuccessColor.Println("Done")
+	utils.SuccessColor.Println("Done")
 
 	return nil
 }

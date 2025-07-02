@@ -17,21 +17,14 @@ import (
 	"github.com/velgardey/yok/cli/internal/utils"
 )
 
-const (
-	// ApiURL is the base URL for the Yok API
-	ApiURL = "http://api.yok.ninja"
-)
-
 // HTTP client with reasonable timeout
-var httpClient = &http.Client{
-	Timeout: 30 * time.Second,
-}
+var httpClient = utils.CreateHTTPClient()
 
 // FindProjectByName checks if a project with the given name already exists
 func FindProjectByName(name string) (*types.Project, error) {
 	// URL encode the name to handle spaces and special characters
 	escapedName := url.QueryEscape(name)
-	resp, err := httpClient.Get(ApiURL + "/project/check?name=" + escapedName)
+	resp, err := httpClient.Get(utils.ApiURL + "/project/check?name=" + escapedName)
 	if err != nil {
 		return nil, err
 	}
@@ -92,7 +85,7 @@ func GetOrCreateProject(name, repoURL, framework string) (*types.Project, error)
 		return nil, err
 	}
 
-	req, err := http.NewRequest("POST", ApiURL+"/project", bytes.NewBuffer(jsonData))
+	req, err := http.NewRequest("POST", utils.ApiURL+"/project", bytes.NewBuffer(jsonData))
 	if err != nil {
 		return nil, err
 	}
@@ -135,7 +128,7 @@ func DeployProject(projectID string) (*types.DeploymentResponse, error) {
 		return nil, err
 	}
 
-	req, err := http.NewRequest("POST", ApiURL+"/deploy", bytes.NewBuffer(jsonData))
+	req, err := http.NewRequest("POST", utils.ApiURL+"/deploy", bytes.NewBuffer(jsonData))
 	if err != nil {
 		return nil, err
 	}
@@ -165,7 +158,7 @@ func DeployProject(projectID string) (*types.DeploymentResponse, error) {
 
 // GetDeploymentStatus gets the status of a deployment
 func GetDeploymentStatus(deploymentID string) (*types.Deployment, error) {
-	resp, err := httpClient.Get(ApiURL + "/deployment/" + deploymentID)
+	resp, err := httpClient.Get(utils.ApiURL + "/deployment/" + deploymentID)
 	if err != nil {
 		return nil, err
 	}
@@ -190,7 +183,7 @@ func GetDeploymentStatus(deploymentID string) (*types.Deployment, error) {
 
 // ListDeployments lists deployments for a project
 func ListDeployments(projectID string) ([]types.Deployment, error) {
-	resp, err := httpClient.Get(ApiURL + "/project/" + projectID + "/deployments")
+	resp, err := httpClient.Get(utils.ApiURL + "/project/" + projectID + "/deployments")
 	if err != nil {
 		return nil, err
 	}
@@ -224,7 +217,7 @@ func CancelDeployment(deploymentID string) error {
 		return err
 	}
 
-	req, err := http.NewRequest("POST", ApiURL+"/deployment/"+deploymentID+"/cancel", bytes.NewBuffer(jsonData))
+	req, err := http.NewRequest("POST", utils.ApiURL+"/deployment/"+deploymentID+"/cancel", bytes.NewBuffer(jsonData))
 	if err != nil {
 		return err
 	}
@@ -247,7 +240,7 @@ func CancelDeployment(deploymentID string) error {
 // GetProject gets a project by ID
 func GetProject(projectID string) (*types.Project, error) {
 	// Try to get the project directly by ID first
-	resp, err := httpClient.Get(ApiURL + "/project/" + projectID)
+	resp, err := httpClient.Get(utils.ApiURL + "/project/" + projectID)
 	if err != nil {
 		return nil, err
 	}
@@ -259,7 +252,7 @@ func GetProject(projectID string) (*types.Project, error) {
 		resp.Body.Close()
 
 		// Get the deployments for this project
-		deploymentsResp, err := httpClient.Get(ApiURL + "/project/" + projectID + "/deployments")
+		deploymentsResp, err := httpClient.Get(utils.ApiURL + "/project/" + projectID + "/deployments")
 		if err != nil {
 			return nil, err
 		}

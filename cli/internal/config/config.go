@@ -9,22 +9,19 @@ import (
 	"github.com/velgardey/yok/cli/internal/utils"
 )
 
-// ConfigFile is the name of the configuration file
-const ConfigFile = ".yok-config.json"
-
 // SaveConfig saves the configuration to a local file
 func SaveConfig(config types.Config) error {
 	jsonData, err := json.Marshal(config)
 	if err != nil {
 		return err
 	}
-	return os.WriteFile(ConfigFile, jsonData, 0644)
+	return os.WriteFile(utils.ConfigFile, jsonData, 0644)
 }
 
 // LoadConfig loads configuration from a local file
 func LoadConfig() (types.Config, error) {
 	var config types.Config
-	data, err := os.ReadFile(ConfigFile)
+	data, err := os.ReadFile(utils.ConfigFile)
 	if err != nil {
 		if os.IsNotExist(err) {
 			return config, nil // Return empty config if file doesn't exist
@@ -55,6 +52,6 @@ func RemoveConfig() error {
 		return err
 	}
 
-	configFilePath := filepath.Join(cwd, ConfigFile)
+	configFilePath := filepath.Join(cwd, utils.ConfigFile)
 	return os.RemoveAll(configFilePath)
 }

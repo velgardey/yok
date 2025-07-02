@@ -152,22 +152,9 @@ func init() {
 
 	// Reset config command
 	var resetCmd = &cobra.Command{
-		Use:   "reset",
-		Short: "Reset stored project ID",
-		Run: func(cmd *cobra.Command, args []string) {
-			err := config.RemoveConfig()
-			if err != nil {
-				utils.HandleError(err, "Error removing config file")
-			} else {
-				utils.SuccessColor.Println("✅ Project configuration reset successfully")
-			}
-		},
-	}
-
-	// Reset config command (alias)
-	var resetConfigCmd = &cobra.Command{
-		Use:   "reset-config",
-		Short: "Reset stored project ID configuration",
+		Use:     "reset",
+		Short:   "Reset stored project ID",
+		Aliases: []string{"reset-config"},
 		Run: func(cmd *cobra.Command, args []string) {
 			err := config.RemoveConfig()
 			if err != nil {
@@ -179,5 +166,5 @@ func init() {
 	}
 
 	// Add commands to root
-	RootCmd.AddCommand(createCmd, resetCmd, resetConfigCmd)
+	RootCmd.AddCommand(createCmd, resetCmd)
 }
