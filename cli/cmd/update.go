@@ -194,12 +194,21 @@ func hasAdminPrivileges() bool {
 		return false
 	}
 
-	// Try writing to a protected location (Program Files)
+	// Try multiple methods to detect admin privileges
+
+	// Method 1: Try writing to a protected location
 	testFile := filepath.Join(os.Getenv("PROGRAMFILES"), ".yok_admin_test")
 	file, err := os.OpenFile(testFile, os.O_RDWR|os.O_CREATE, 0666)
 	if err == nil {
 		file.Close()
 		os.Remove(testFile)
+		return true
+	}
+
+	// Method 2: Check using PowerShell (more reliable)
+	cmd := exec.Command("powershell", "-Command", "[bool](([System.Security.Principal.WindowsIdentity]::GetCurrent()).groups -match 'S-1-5-32-544')")
+	output, err := cmd.Output()
+	if err == nil && strings.TrimSpace(string(output)) == "True" {
 		return true
 	}
 
@@ -252,7 +261,21 @@ echo Installing update...
 echo Target location: %s
 
 rem Ensure target directory exists
-if not exist "%s" mkdir "%s"
+if not exist "%s" (
+    mkdir "%s"
+    echo Created directory: %s
+)
+
+rem Create backup of current executable if it exists
+if exist "%s" (
+    echo Creating backup...
+    copy /y "%s" "%s.backup" > nul 2>&1
+    if errorlevel 1 (
+        echo Warning: Could not create backup.
+    ) else (
+        echo Backup created successfully at %s.backup
+    )
+)
 
 rem Make multiple attempts to replace the file
 set MAX_ATTEMPTS=3
@@ -261,16 +284,14 @@ set ATTEMPT=1
 :replace_loop
 echo Attempt %%ATTEMPT%% of %%MAX_ATTEMPTS%%...
 
-rem Try direct move first
-if exist "%s" (
-    rem Create backup
-    copy /y "%s" "%s.backup" > nul 2>&1
-)
+rem Wait briefly to ensure any file handles are released
+timeout /t 1 > nul
 
+rem Try direct move first
 move /y "%s.new" "%s" > nul 2>&1
 if not errorlevel 1 (
     echo File replaced successfully.
-    goto success
+    goto verify_file
 )
 
 rem If move fails, try copy and delete
@@ -278,15 +299,15 @@ copy /y "%s.new" "%s" > nul 2>&1
 if not errorlevel 1 (
     del "%s.new" > nul 2>&1
     echo File replaced with copy method.
-    goto success
+    goto verify_file
 )
 
 rem Try PowerShell force copy as another method
-powershell -Command "Copy-Item -Path '%s.new' -Destination '%s' -Force"
+powershell -Command "Copy-Item -Path '%s.new' -Destination '%s' -Force -ErrorAction SilentlyContinue"
 if not errorlevel 1 (
     if exist "%s.new" del "%s.new" > nul 2>&1
     echo File replaced with PowerShell method.
-    goto success
+    goto verify_file
 )
 
 rem If still not successful, increment attempt and try again
@@ -309,24 +330,81 @@ echo.
 pause
 exit /b 1
 
-:success
+:verify_file
+echo.
+echo Verifying file was correctly installed...
+if exist "%s" (
+    echo ✅ File exists at correct location.
+) else (
+    echo ERROR: File not found at expected location.
+    echo Expected: %s
+    echo.
+    echo Checking permissions and trying to recover...
+    
+    if exist "%s.new" (
+        echo Found update file. Trying alternative copy method...
+        powershell -Command "Copy-Item -Path '%s.new' -Destination '%s' -Force -ErrorAction SilentlyContinue"
+        
+        if exist "%s" (
+            echo ✅ Recovery successful.
+        ) else (
+            echo ❌ Recovery failed.
+        )
+    )
+    
+    if exist "%s.backup" (
+        echo Backup file exists. You may need to manually restore from: %s.backup
+    )
+)
+
 echo.
 echo ✅ Yok CLI has been updated to %s successfully!
 echo.
+
+rem Ensure the file is in PATH or inform user
+set YOK_DIR=%s
+set PATH_CONTAINS_YOK=false
+for %%p in ("%%PATH:;=" "%%") do (
+    if "%%~p" == "%s" set PATH_CONTAINS_YOK=true
+)
+
+if "%%PATH_CONTAINS_YOK%%" == "false" (
+    echo Note: The installation directory is not in your PATH.
+    echo You can add it with: setx PATH "%%PATH%%;%s" /M
+    echo.
+)
 
 rem Step 4: Launch the new version (optional)
 set LAUNCH_APP=n
 set /p LAUNCH_APP="Would you like to launch Yok CLI now? (y/n): "
 if /i "%%LAUNCH_APP%%" == "y" (
     echo Starting Yok CLI...
-    start "" "%s" version
+    cd /d "%%USERPROFILE%%"
+    
+    rem Try with full path first
+    "%s" --version > nul 2>&1
+    if errorlevel 1 (
+        echo Warning: Could not launch with full path.
+        echo Trying with command name only...
+        yok --version > nul 2>&1
+        if errorlevel 1 (
+            echo The system cannot find the file. This may be a PATH issue.
+            echo You can run the CLI using the full path: %s
+        ) else (
+            echo Launched successfully with command name.
+            start cmd /k yok
+        )
+    ) else (
+        echo Launched successfully.
+        start cmd /k "%s" version
+    )
 )
 
 echo.
 echo Update completed! You can now use 'yok' to run the updated version.
 echo.
 pause
-`, pid, pid, execPath, latest.URL, latest.AssetURL, execPath, execPath, execDir, execDir, execPath, execPath, execPath, execPath, execPath, execPath, execPath, execPath, execPath, execPath, execPath, execPath, latest.Version, execPath)
+`, pid, pid, execPath, latest.URL, latest.AssetURL, execPath, execPath, execDir, execDir, execDir, execPath, execPath, execPath, execPath, execPath, execPath, execPath, execPath, execPath, execPath, execPath, execPath, execPath, execPath, execPath, execPath, execPath, execPath, execPath, execPath, execPath, latest.Version, execDir, execDir, execDir, execPath, execPath, execPath)
 
 	// Write the batch file
 	if err := os.WriteFile(updateBatchPath, []byte(batchContent), 0700); err != nil {
