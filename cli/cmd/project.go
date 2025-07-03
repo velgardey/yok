@@ -6,7 +6,6 @@ import (
 	"github.com/spf13/cobra"
 	"github.com/velgardey/yok/cli/internal/api"
 	"github.com/velgardey/yok/cli/internal/config"
-	"github.com/velgardey/yok/cli/internal/git"
 	"github.com/velgardey/yok/cli/internal/types"
 	"github.com/velgardey/yok/cli/internal/utils"
 )
@@ -28,7 +27,7 @@ func EnsureProjectID() (types.Config, error) {
 
 		if usingExisting {
 			// Use existing project
-			utils.SuccessColor.Printf("✅ Using existing project: %s\n", existingProject.Name)
+			utils.SuccessColor.Printf("[OK] Using existing project: %s\n", existingProject.Name)
 
 			// Save project ID for future use
 			conf.ProjectID = existingProject.ID
@@ -40,16 +39,8 @@ func EnsureProjectID() (types.Config, error) {
 			return conf, nil
 		}
 
-		// Get repository info based on user's choice (manual entry or auto-detect)
-		useManualEntry := false // Default to auto-detect
-		var tempRepoName string
-		repoURL, tempRepoName, err = git.GetRepoInfo(useManualEntry)
-		if err != nil {
-			return conf, fmt.Errorf("error getting repository info: %v", err)
-		}
-		_ = tempRepoName // Avoid unused variable warning
-
-		framework = api.DetectFramework()
+		// Repository URL and framework are now handled in PromptForProjectCreationDetails
+		// No additional processing needed here
 
 		// Create or get existing project (double-check since another user might have created it)
 		project, err := api.GetOrCreateProject(projectName, repoURL, framework)
@@ -83,7 +74,7 @@ func init() {
 
 			if usingExisting {
 				// Display project info and save the project ID
-				utils.SuccessColor.Printf("✅ Using existing project\n")
+				utils.SuccessColor.Printf("[OK] Using existing project\n")
 
 				// Display comprehensive project info
 				fmt.Println("\nProject Information:")
@@ -105,25 +96,19 @@ func init() {
 				if err != nil {
 					utils.WarnColor.Printf("Warning: Could not save project ID: %v\n", err)
 				} else {
-					utils.SuccessColor.Println("\n✅ Project ID saved for future deployments")
+					utils.SuccessColor.Println("\n[OK] Project ID saved for future deployments")
 				}
 				return
 			}
 
-			// Get repository information
-			useManualEntry := true // Set to true for manual entry, user can choose based on prompt
-			var tempRepoName string
-			repoURL, tempRepoName, err = git.GetRepoInfo(useManualEntry)
-			utils.HandleError(err, "Error getting repository info")
-			_ = tempRepoName // Avoid unused variable warning
-
-			framework = api.DetectFramework()
+			// Repository URL and framework are already obtained from PromptForProjectCreationDetails
+			// No additional processing needed
 
 			// Create or get existing project
 			project, err := api.GetOrCreateProject(projectName, repoURL, framework)
 			utils.HandleError(err, "Error creating project")
 
-			utils.SuccessColor.Printf("✅ Project created/updated successfully\n")
+			utils.SuccessColor.Printf("[OK] Project created/updated successfully\n")
 
 			// Display comprehensive project info
 			fmt.Println("\nProject Information:")
@@ -145,7 +130,7 @@ func init() {
 			if err != nil {
 				utils.WarnColor.Printf("Warning: Could not save project ID: %v\n", err)
 			} else {
-				utils.SuccessColor.Println("\n✅ Project ID saved for future deployments")
+				utils.SuccessColor.Println("\n[OK] Project ID saved for future deployments")
 			}
 		},
 	}
@@ -160,7 +145,7 @@ func init() {
 			if err != nil {
 				utils.HandleError(err, "Error removing config file")
 			} else {
-				utils.SuccessColor.Println("✅ Project configuration reset successfully")
+				utils.SuccessColor.Println("[OK] Project configuration reset successfully")
 			}
 		},
 	}

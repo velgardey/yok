@@ -138,7 +138,8 @@ func init() {
 				Message: fmt.Sprintf("Are you sure you want to cancel deployment %s?", deploymentId),
 				Default: false,
 			}
-			survey.AskOne(cancelPrompt, &confirm)
+			opts := utils.GetSurveyOptions()
+			survey.AskOne(cancelPrompt, &confirm, opts)
 
 			if !confirm {
 				utils.InfoColor.Println("Cancellation aborted.")
@@ -156,7 +157,7 @@ func init() {
 				return
 			}
 
-			utils.SuccessColor.Println("✅ Deployment cancelled successfully")
+			utils.SuccessColor.Println("[OK] Deployment cancelled successfully")
 		},
 	}
 

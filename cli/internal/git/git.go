@@ -8,7 +8,6 @@ import (
 	"strings"
 
 	"github.com/AlecAivazis/survey/v2"
-	"github.com/go-git/go-git/v5"
 	"github.com/velgardey/yok/cli/internal/utils"
 )
 
@@ -27,95 +26,42 @@ func ExecuteCommand(args ...string) (string, error) {
 }
 
 // GetRepoInfo gets repository information from the current directory or prompts user
+// DEPRECATED: This function is no longer used. Use API client functions instead.
 func GetRepoInfo(useManualEntry bool) (string, string, error) {
-	// If manual entry is requested, prompt for the Git repo URL
-	if useManualEntry {
-		var repoURL string
-		prompt := &survey.Input{
-			Message: "Enter your Git repository URL:",
-			Help:    "This should be the HTTPS or SSH URL to your Git repository",
-		}
-		if err := survey.AskOne(prompt, &repoURL); err != nil {
-			return "", "", fmt.Errorf("failed to get repo URL: %s", err)
-		}
+	return "", "", fmt.Errorf("GetRepoInfo is deprecated - use API client functions instead")
+}
 
-		if repoURL == "" {
-			return "", "", fmt.Errorf("repository URL cannot be empty")
-		}
-
-		// Extract the repository name from the URL
-		parts := strings.Split(repoURL, "/")
-		repoName := parts[len(parts)-1]
-		// Remove the .git extension if present
-		repoName = strings.TrimSuffix(repoName, ".git")
-
-		return repoURL, repoName, nil
+// GetRemoteURL gets the remote URL using git command
+func GetRemoteURL() (string, error) {
+	// Try to get origin remote first (most common case)
+	output, err := ExecuteCommand("remote", "get-url", "origin")
+	if err == nil && strings.TrimSpace(output) != "" {
+		return strings.TrimSpace(output), nil
 	}
 
-	// Auto-detection flow
-	// Make sure we have a git repository
-	if err := EnsureRepo(); err != nil {
-		return "", "", err
-	}
-
-	repo, err := git.PlainOpen(".")
+	// If origin doesn't exist, try to get any remote
+	output, err = ExecuteCommand("remote")
 	if err != nil {
-		return "", "", fmt.Errorf("error opening git repository: %v", err)
+		return "", fmt.Errorf("failed to list git remotes: %w", err)
 	}
 
-	// Get the remote URL
-	remotes, err := repo.Remotes()
+	remotes := strings.Fields(strings.TrimSpace(output))
+	if len(remotes) == 0 {
+		return "", fmt.Errorf("no git remotes configured")
+	}
+
+	// Get URL of the first available remote
+	output, err = ExecuteCommand("remote", "get-url", remotes[0])
 	if err != nil {
-		return "", "", fmt.Errorf("failed to get remotes: %s", err)
+		return "", fmt.Errorf("failed to get URL for remote '%s': %w", remotes[0], err)
 	}
 
-	// Try to find the origin remote
-	var remoteURL string
-	for _, remote := range remotes {
-		if remote.Config().Name == "origin" && len(remote.Config().URLs) > 0 {
-			remoteURL = remote.Config().URLs[0]
-			break
-		}
-	}
-
-	// If no remote URL found, try to get the default remote
-	if remoteURL == "" && len(remotes) > 0 {
-		remoteURL = remotes[0].Config().URLs[0]
-	}
-
+	remoteURL := strings.TrimSpace(output)
 	if remoteURL == "" {
-		// No remote found, prompt the user for a remote URL
-		var remoteURLPrompt string
-		prompt := &survey.Input{
-			Message: "No remote found. Please enter a git remote URL:",
-		}
-		if err := survey.AskOne(prompt, &remoteURLPrompt); err != nil {
-			return "", "", fmt.Errorf("failed to get remote URL: %s", err)
-		}
-
-		if remoteURLPrompt == "" {
-			return "", "", fmt.Errorf("remote URL cannot be empty")
-		}
-
-		// Add the remote URL quietly in the background
-		utils.InfoColor.Print("Adding remote origin... ")
-		_, err := ExecuteCommand("remote", "add", "origin", remoteURLPrompt)
-		if err != nil {
-			return "", "", fmt.Errorf("failed to add remote: %s", err)
-		}
-		utils.SuccessColor.Println("Done")
-
-		remoteURL = remoteURLPrompt
+		return "", fmt.Errorf("remote '%s' has no URL configured", remotes[0])
 	}
 
-	// Extract the repository name from the remote URL
-	parts := strings.Split(remoteURL, "/")
-	repoName := parts[len(parts)-1]
-
-	// Remove the .git extension if present
-	repoName = strings.TrimSuffix(repoName, ".git")
-
-	return remoteURL, repoName, nil
+	return remoteURL, nil
 }
 
 // EnsureRepo ensures that the current directory is a git repository
@@ -134,110 +80,150 @@ func EnsureRepo() error {
 
 // CheckLocalRemoteSync checks if local changes match remote
 func CheckLocalRemoteSync() (bool, error) {
-	// Fetch latest from remote
-	_, err := ExecuteCommand("fetch")
+	// First check if we have a remote
+	remoteURL, err := GetRemoteURL()
 	if err != nil {
-		return false, fmt.Errorf("failed to fetch from remote: %v", err)
+		return false, fmt.Errorf("failed to get remote URL: %w", err)
+	}
+	if remoteURL == "" {
+		return false, fmt.Errorf("no remote repository configured")
+	}
+
+	// Fetch latest from remote
+	if _, err := ExecuteCommand("fetch"); err != nil {
+		return false, fmt.Errorf("failed to fetch from remote: %w", err)
+	}
+
+	// Check if we have an upstream branch
+	if _, err := ExecuteCommand("rev-parse", "--abbrev-ref", "@{upstream}"); err != nil {
+		return false, fmt.Errorf("no upstream branch configured")
 	}
 
 	// Check if we're behind the remote
 	behindOutput, err := ExecuteCommand("rev-list", "--count", "HEAD..@{upstream}")
 	if err != nil {
-		return false, fmt.Errorf("failed to check if behind remote: %v", err)
+		return false, fmt.Errorf("failed to check if behind remote: %w", err)
 	}
-	behindCount := strings.TrimSpace(behindOutput)
-	if behindCount != "0" {
+	if behindCount := strings.TrimSpace(behindOutput); behindCount != "0" {
 		return false, fmt.Errorf("your local branch is %s commits behind the remote", behindCount)
 	}
 
 	// Check if we're ahead of the remote
 	aheadOutput, err := ExecuteCommand("rev-list", "--count", "@{upstream}..HEAD")
 	if err != nil {
-		return false, fmt.Errorf("failed to check if ahead of remote: %v", err)
+		return false, fmt.Errorf("failed to check if ahead of remote: %w", err)
 	}
-	aheadCount := strings.TrimSpace(aheadOutput)
-	if aheadCount != "0" {
+	if aheadCount := strings.TrimSpace(aheadOutput); aheadCount != "0" {
 		return false, fmt.Errorf("your local branch is %s commits ahead of the remote", aheadCount)
 	}
 
 	// Check for uncommitted changes
-	statusOutput, err := ExecuteCommand("status", "--porcelain")
-	if err != nil {
-		return false, fmt.Errorf("failed to check for uncommitted changes: %v", err)
-	}
-	if statusOutput != "" {
+	if hasUncommittedChanges() {
 		return false, fmt.Errorf("you have uncommitted changes")
 	}
 
 	return true, nil
 }
 
-// HandleUncommittedChanges checks for uncommitted changes and offers to commit and push them
-func HandleUncommittedChanges() error {
-	// Check for uncommitted changes
+// hasUncommittedChanges checks if there are any uncommitted changes
+func hasUncommittedChanges() bool {
 	statusOutput, err := ExecuteCommand("status", "--porcelain")
 	if err != nil {
-		return fmt.Errorf("failed to check for uncommitted changes: %v", err)
+		return false // Assume no changes if we can't check
+	}
+	return strings.TrimSpace(statusOutput) != ""
+}
+
+// HandleUncommittedChanges checks for uncommitted changes and offers to commit and push them
+func HandleUncommittedChanges() error {
+	if !hasUncommittedChanges() {
+		return nil // No changes to handle
 	}
 
-	if statusOutput == "" {
-		// No changes to commit
-		return nil
+	// Show uncommitted changes
+	statusOutput, err := ExecuteCommand("status", "--porcelain")
+	if err != nil {
+		return fmt.Errorf("failed to check for uncommitted changes: %w", err)
 	}
 
-	// We have uncommitted changes, ask user if they want to commit them
 	fmt.Println("Uncommitted changes detected:")
 	fmt.Println(statusOutput)
 
-	commitChanges := false
-	commitPrompt := &survey.Confirm{
-		Message: "Do you want to commit and push these changes before deploying?",
-		Default: true,
-	}
-	survey.AskOne(commitPrompt, &commitChanges)
-
-	if !commitChanges {
+	// Ask user if they want to commit changes
+	if !confirmCommitChanges() {
 		return fmt.Errorf("you have uncommitted changes")
 	}
 
 	// Get commit message
+	commitMessage, err := getCommitMessage()
+	if err != nil {
+		return err
+	}
+
+	// Perform git operations
+	return CommitAndPushChanges(commitMessage)
+}
+
+// confirmCommitChanges asks user if they want to commit changes
+func confirmCommitChanges() bool {
+	opts := utils.GetSurveyOptions()
+
+	var commitChanges bool
+	prompt := &survey.Confirm{
+		Message: "Do you want to commit and push these changes before deploying?",
+		Default: true,
+	}
+
+	if err := survey.AskOne(prompt, &commitChanges, opts); err != nil {
+		return false
+	}
+
+	return commitChanges
+}
+
+// getCommitMessage prompts user for a commit message
+func getCommitMessage() (string, error) {
+	opts := utils.GetSurveyOptions()
+
 	var commitMessage string
-	msgPrompt := &survey.Input{
+	prompt := &survey.Input{
 		Message: "Enter a commit message:",
 	}
-	err = survey.AskOne(msgPrompt, &commitMessage)
-	if err != nil {
-		return fmt.Errorf("error getting commit message: %v", err)
+
+	if err := survey.AskOne(prompt, &commitMessage, opts); err != nil {
+		return "", fmt.Errorf("error getting commit message: %w", err)
 	}
 
-	if commitMessage == "" {
-		return fmt.Errorf("commit message cannot be empty")
+	if strings.TrimSpace(commitMessage) == "" {
+		return "", fmt.Errorf("commit message cannot be empty")
 	}
 
+	return commitMessage, nil
+}
+
+// CommitAndPushChanges performs the git add, commit, and push operations
+func CommitAndPushChanges(commitMessage string) error {
 	// Git add
-	utils.InfoColor.Print("📝 Adding changes... ")
-	_, err = ExecuteCommand("add", ".")
-	if err != nil {
+	utils.InfoColor.Print("[+] Adding changes... ")
+	if _, err := ExecuteCommand("add", "."); err != nil {
 		fmt.Println()
-		return fmt.Errorf("error adding files: %v", err)
+		return fmt.Errorf("error adding files: %w", err)
 	}
 	utils.SuccessColor.Println("Done")
 
 	// Git commit
-	utils.InfoColor.Print("💾 Committing changes... ")
-	_, err = ExecuteCommand("commit", "-m", commitMessage)
-	if err != nil {
+	utils.InfoColor.Print("[*] Committing changes... ")
+	if _, err := ExecuteCommand("commit", "-m", commitMessage); err != nil {
 		fmt.Println()
-		return fmt.Errorf("error committing changes: %v", err)
+		return fmt.Errorf("error committing changes: %w", err)
 	}
 	utils.SuccessColor.Println("Done")
 
 	// Git push
-	utils.InfoColor.Print("🚀 Pushing to remote... ")
-	_, err = ExecuteCommand("push")
-	if err != nil {
+	utils.InfoColor.Print("[^] Pushing to remote... ")
+	if _, err := ExecuteCommand("push"); err != nil {
 		fmt.Println()
-		return fmt.Errorf("error pushing changes: %v", err)
+		return fmt.Errorf("error pushing changes: %w", err)
 	}
 	utils.SuccessColor.Println("Done")
 

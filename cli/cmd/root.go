@@ -25,18 +25,11 @@ func Execute() {
 	// Customize version template
 	RootCmd.SetVersionTemplate("Yok CLI v{{.Version}}\n")
 
+	// Add git command support
+	addGitCommands()
+
 	// Set up special handling for unknown commands to pass them to git
-	RootCmd.SetFlagErrorFunc(func(cmd *cobra.Command, err error) error {
-		// Check if the command is a git command that we don't explicitly handle
-		if len(os.Args) > 1 && !strings.HasPrefix(os.Args[1], "-") {
-			output, cmdErr := git.ExecuteCommand(os.Args[1:]...)
-			if cmdErr == nil {
-				fmt.Print(output)
-				os.Exit(0)
-			}
-		}
-		return err
-	})
+	RootCmd.SetFlagErrorFunc(handleUnknownCommand)
 
 	if err := RootCmd.Execute(); err != nil {
 		fmt.Println(err)
@@ -44,53 +37,70 @@ func Execute() {
 	}
 }
 
-func init() {
-	// Add git commands as passthrough
-	addGitCommands()
+// handleUnknownCommand handles unknown commands by trying to pass them to git
+func handleUnknownCommand(cmd *cobra.Command, err error) error {
+	// Check if the command is a git command that we don't explicitly handle
+	if len(os.Args) > 1 && !strings.HasPrefix(os.Args[1], "-") {
+		if output, cmdErr := git.ExecuteCommand(os.Args[1:]...); cmdErr == nil {
+			fmt.Print(output)
+			os.Exit(0)
+		}
+	}
+	return err
 }
 
-// Add all common git commands as explicit subcommands
+func init() {
+	// Git commands will be added in Execute() function to avoid initialization issues
+}
+
+// addGitCommands adds all common git commands as explicit subcommands
 func addGitCommands() {
-	// List of common git commands
+	// List of common git commands to support
 	gitCommands := []string{
 		"add", "commit", "push", "pull", "checkout", "branch", "status",
 		"log", "fetch", "merge", "rebase", "reset", "tag", "stash",
 	}
 
+	// Add each git command as a subcommand
 	for _, gitCmd := range gitCommands {
-		cmd := &cobra.Command{
-			Use:   gitCmd,
-			Short: fmt.Sprintf("Execute git %s", gitCmd),
-			Run: func(gitCmd string) func(cmd *cobra.Command, args []string) {
-				return func(cmd *cobra.Command, args []string) {
-					allArgs := append([]string{gitCmd}, args...)
-					output, err := git.ExecuteCommand(allArgs...)
-					if err != nil {
-						fmt.Println(err)
-						os.Exit(1)
-					}
-					fmt.Print(output)
-				}
-			}(gitCmd),
-			DisableFlagParsing: true,
-		}
-		RootCmd.AddCommand(cmd)
+		RootCmd.AddCommand(createGitCommand(gitCmd))
 	}
 
 	// Add a fallback command handler for all other git commands
-	var fallbackCmd = &cobra.Command{
+	RootCmd.AddCommand(createGitFallbackCommand())
+}
+
+// createGitCommand creates a cobra command for a specific git command
+func createGitCommand(gitCmd string) *cobra.Command {
+	return &cobra.Command{
+		Use:   gitCmd,
+		Short: fmt.Sprintf("Execute git %s", gitCmd),
+		Run: func(cmd *cobra.Command, args []string) {
+			executeGitCommand(append([]string{gitCmd}, args...))
+		},
+		DisableFlagParsing: true,
+	}
+}
+
+// createGitFallbackCommand creates a fallback command for other git commands
+func createGitFallbackCommand() *cobra.Command {
+	return &cobra.Command{
 		Use:   "git",
 		Short: "Execute any other git command",
 		Args:  cobra.MinimumNArgs(1),
 		Run: func(cmd *cobra.Command, args []string) {
-			output, err := git.ExecuteCommand(args...)
-			if err != nil {
-				fmt.Println(err)
-				os.Exit(1)
-			}
-			fmt.Print(output)
+			executeGitCommand(args)
 		},
 		DisableFlagParsing: true,
 	}
-	RootCmd.AddCommand(fallbackCmd)
+}
+
+// executeGitCommand executes a git command and handles errors
+func executeGitCommand(args []string) {
+	output, err := git.ExecuteCommand(args...)
+	if err != nil {
+		fmt.Println(err)
+		os.Exit(1)
+	}
+	fmt.Print(output)
 }

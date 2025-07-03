@@ -9,10 +9,12 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"time"
 
 	"github.com/AlecAivazis/survey/v2"
+	"github.com/velgardey/yok/cli/internal/git"
 	"github.com/velgardey/yok/cli/internal/types"
 	"github.com/velgardey/yok/cli/internal/utils"
 )
@@ -22,34 +24,30 @@ var httpClient = utils.CreateHTTPClient()
 
 // FindProjectByName checks if a project with the given name already exists
 func FindProjectByName(name string) (*types.Project, error) {
-	// URL encode the name to handle spaces and special characters
 	escapedName := url.QueryEscape(name)
-	resp, err := httpClient.Get(utils.ApiURL + "/project/check?name=" + escapedName)
+	url := fmt.Sprintf("%s/project/check?name=%s", utils.ApiURL, escapedName)
+
+	resp, err := httpClient.Get(url)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("failed to check project: %w", err)
 	}
 	defer resp.Body.Close()
 
-	// Handle non-success status codes
-	if resp.StatusCode != http.StatusOK {
-		// If endpoint doesn't exist (404), the API might be an older version
-		if resp.StatusCode == http.StatusNotFound {
-			return nil, nil // Just return nil to indicate no project found
-		}
+	// Handle different status codes
+	switch resp.StatusCode {
+	case http.StatusOK:
+		// Continue processing
+	case http.StatusNotFound:
+		return nil, nil // Project not found or endpoint doesn't exist
+	default:
 		return nil, fmt.Errorf("API returned status code: %d", resp.StatusCode)
 	}
 
-	body, err := io.ReadAll(resp.Body)
-	if err != nil {
-		return nil, err
-	}
-
 	var checkResp types.ProjectCheckResponse
-	if err := json.Unmarshal(body, &checkResp); err != nil {
-		return nil, err
+	if err := utils.DecodeJSON(resp.Body, &checkResp); err != nil {
+		return nil, fmt.Errorf("failed to decode response: %w", err)
 	}
 
-	// If project exists, return it
 	if checkResp.Status == "success" && checkResp.Data.Exists {
 		return &checkResp.Data.Project, nil
 	}
@@ -59,18 +57,20 @@ func FindProjectByName(name string) (*types.Project, error) {
 
 // GetOrCreateProject creates or gets a project
 func GetOrCreateProject(name, repoURL, framework string) (*types.Project, error) {
-	// Check if project already exists by name
-	existingProject, err := FindProjectByName(name)
-	if err != nil {
-		return nil, fmt.Errorf("error checking for existing project: %v", err)
-	}
-
-	if existingProject != nil {
+	// Check if project already exists
+	if existingProject, err := FindProjectByName(name); err != nil {
+		return nil, fmt.Errorf("error checking for existing project: %w", err)
+	} else if existingProject != nil {
 		utils.InfoColor.Printf("Project '%s' already exists. Using existing project.\n", name)
 		return existingProject, nil
 	}
 
-	// Project doesn't exist, create it
+	// Create new project
+	return createProject(name, repoURL, framework)
+}
+
+// createProject creates a new project via API
+func createProject(name, repoURL, framework string) (*types.Project, error) {
 	s := utils.StartSpinner("Creating project on Yok...")
 	defer utils.StopSpinner(s)
 
@@ -82,33 +82,29 @@ func GetOrCreateProject(name, repoURL, framework string) (*types.Project, error)
 
 	jsonData, err := json.Marshal(projectData)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("failed to marshal project data: %w", err)
 	}
 
 	req, err := http.NewRequest("POST", utils.ApiURL+"/project", bytes.NewBuffer(jsonData))
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("failed to create request: %w", err)
 	}
 	req.Header.Set("Content-Type", "application/json")
 
 	resp, err := httpClient.Do(req)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("failed to send request: %w", err)
 	}
 	defer resp.Body.Close()
 
-	body, err := io.ReadAll(resp.Body)
-	if err != nil {
-		return nil, err
-	}
-
 	if resp.StatusCode != http.StatusCreated {
-		return nil, fmt.Errorf("failed to create project: %s", string(body))
+		body, _ := io.ReadAll(resp.Body)
+		return nil, fmt.Errorf("failed to create project (status %d): %s", resp.StatusCode, string(body))
 	}
 
 	var projectResp types.ProjectResponse
-	if err := json.Unmarshal(body, &projectResp); err != nil {
-		return nil, err
+	if err := utils.DecodeJSON(resp.Body, &projectResp); err != nil {
+		return nil, fmt.Errorf("failed to decode response: %w", err)
 	}
 
 	return &projectResp.Data.Project, nil
@@ -125,42 +121,41 @@ func DeployProject(projectID string) (*types.DeploymentResponse, error) {
 
 	jsonData, err := json.Marshal(deployData)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("failed to marshal deploy data: %w", err)
 	}
 
 	req, err := http.NewRequest("POST", utils.ApiURL+"/deploy", bytes.NewBuffer(jsonData))
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("failed to create request: %w", err)
 	}
 	req.Header.Set("Content-Type", "application/json")
 
 	resp, err := httpClient.Do(req)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("failed to send request: %w", err)
 	}
 	defer resp.Body.Close()
 
-	body, err := io.ReadAll(resp.Body)
-	if err != nil {
-		return nil, err
-	}
-
 	if resp.StatusCode != http.StatusAccepted {
-		return nil, fmt.Errorf("failed to deploy project: %s", string(body))
+		body, _ := io.ReadAll(resp.Body)
+		return nil, fmt.Errorf("failed to deploy project (status %d): %s", resp.StatusCode, string(body))
 	}
 
 	var deploymentResp types.DeploymentResponse
-	if err := json.Unmarshal(body, &deploymentResp); err != nil {
-		return nil, err
+	if err := utils.DecodeJSON(resp.Body, &deploymentResp); err != nil {
+		return nil, fmt.Errorf("failed to decode response: %w", err)
 	}
+
 	return &deploymentResp, nil
 }
 
 // GetDeploymentStatus gets the status of a deployment
 func GetDeploymentStatus(deploymentID string) (*types.Deployment, error) {
-	resp, err := httpClient.Get(utils.ApiURL + "/deployment/" + deploymentID)
+	url := fmt.Sprintf("%s/deployment/%s", utils.ApiURL, deploymentID)
+
+	resp, err := httpClient.Get(url)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("failed to get deployment status: %w", err)
 	}
 	defer resp.Body.Close()
 
@@ -168,14 +163,9 @@ func GetDeploymentStatus(deploymentID string) (*types.Deployment, error) {
 		return nil, fmt.Errorf("API returned status code: %d", resp.StatusCode)
 	}
 
-	body, err := io.ReadAll(resp.Body)
-	if err != nil {
-		return nil, err
-	}
-
 	var statusResp types.DeploymentStatusResponse
-	if err := json.Unmarshal(body, &statusResp); err != nil {
-		return nil, err
+	if err := utils.DecodeJSON(resp.Body, &statusResp); err != nil {
+		return nil, fmt.Errorf("failed to decode response: %w", err)
 	}
 
 	return &statusResp.Data.Deployment, nil
@@ -183,9 +173,11 @@ func GetDeploymentStatus(deploymentID string) (*types.Deployment, error) {
 
 // ListDeployments lists deployments for a project
 func ListDeployments(projectID string) ([]types.Deployment, error) {
-	resp, err := httpClient.Get(utils.ApiURL + "/project/" + projectID + "/deployments")
+	url := fmt.Sprintf("%s/project/%s/deployments", utils.ApiURL, projectID)
+
+	resp, err := httpClient.Get(url)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("failed to list deployments: %w", err)
 	}
 	defer resp.Body.Close()
 
@@ -193,14 +185,9 @@ func ListDeployments(projectID string) ([]types.Deployment, error) {
 		return nil, fmt.Errorf("API returned status code: %d", resp.StatusCode)
 	}
 
-	body, err := io.ReadAll(resp.Body)
-	if err != nil {
-		return nil, err
-	}
-
 	var listResp types.DeploymentListResponse
-	if err := json.Unmarshal(body, &listResp); err != nil {
-		return nil, err
+	if err := utils.DecodeJSON(resp.Body, &listResp); err != nil {
+		return nil, fmt.Errorf("failed to decode response: %w", err)
 	}
 
 	return listResp.Data.Deployments, nil
@@ -316,22 +303,22 @@ func FollowDeploymentStatus(deploymentID string, deploymentURL string, projectID
 
 		if status.Status == "COMPLETED" {
 			utils.StopSpinner(s)
-			utils.SuccessColor.Printf("\n✅ Deployment completed successfully!\n")
+			utils.SuccessColor.Printf("\n[OK] Deployment completed successfully!\n")
 
 			// Try to get the project slug for a nicer URL
 			project, err := GetProject(projectID)
 			if err == nil && project.Slug != "" {
-				utils.InfoColor.Printf("ℹ️ Your site is available at:\n")
+				utils.InfoColor.Printf("[i] Your site is available at:\n")
 				fmt.Printf("- https://%s.yok.ninja\n", project.Slug)
 				fmt.Printf("- %s\n", deploymentURL)
 			} else {
 				// If we couldn't get the project or it doesn't have a slug, just show the deployment URL
-				utils.InfoColor.Printf("ℹ️ Your site is now available at: %s\n", deploymentURL)
+				utils.InfoColor.Printf("[i] Your site is now available at: %s\n", deploymentURL)
 			}
 			break
 		} else if status.Status == "FAILED" {
 			utils.StopSpinner(s)
-			utils.ErrorColor.Printf("\n❌ Deployment failed\n")
+			utils.ErrorColor.Printf("\n[X] Deployment failed\n")
 			break
 		}
 		// Continue waiting for other status values
@@ -377,7 +364,8 @@ func SelectDeploymentFromList(projectID string, filter func(types.Deployment) bo
 		Message: "Select a deployment:",
 		Options: options,
 	}
-	survey.AskOne(prompt, &selected)
+	opts := utils.GetSurveyOptions()
+	survey.AskOne(prompt, &selected, opts)
 
 	return filteredDeployments[selected].ID, nil
 }
@@ -386,48 +374,85 @@ func SelectDeploymentFromList(projectID string, filter func(types.Deployment) bo
 func DetectFramework() string {
 	files, _ := filepath.Glob("*")
 
+	// Check for package.json and analyze dependencies
 	for _, file := range files {
 		if file == "package.json" {
-			data, err := os.ReadFile(file)
-			if err == nil {
-				content := string(data)
-
-				if strings.Contains(content, "vite") {
-					return "VITE"
-				} else if strings.Contains(content, "svelte") {
-					return "SVELTE"
-				} else if strings.Contains(content, "react") {
-					return "REACT"
-				} else if strings.Contains(content, "vue") {
-					return "VUE"
-				} else if strings.Contains(content, "angular") {
-					return "ANGULAR"
-				} else if strings.Contains(content, "next") {
-					return "NEXT"
-				}
-				return "OTHER"
+			if framework := detectFrameworkFromPackageJSON(file); framework != "" {
+				return framework
 			}
 		}
 	}
 
 	// Check for static sites
-	for _, file := range files {
-		if file == "index.html" {
-			return "STATIC"
+	if hasIndexHTML(files) {
+		return "STATIC"
+	}
+
+	return "OTHER"
+}
+
+// hasIndexHTML checks if files slice contains index.html
+func hasIndexHTML(files []string) bool {
+	return slices.Contains(files, "index.html")
+}
+
+// autoDetectRepoURL automatically detects the repository URL from the current directory
+func autoDetectRepoURL() (string, error) {
+	// Ensure we have a git repository
+	if err := git.EnsureRepo(); err != nil {
+		return "", err
+	}
+
+	// Try to get remote URL using git command
+	remoteURL, err := git.GetRemoteURL()
+	if err != nil {
+		return "", fmt.Errorf("failed to detect git remote URL: %w", err)
+	}
+
+	return remoteURL, nil
+}
+
+// detectFrameworkFromPackageJSON analyzes package.json to detect framework
+func detectFrameworkFromPackageJSON(filename string) string {
+	data, err := os.ReadFile(filename)
+	if err != nil {
+		return ""
+	}
+
+	content := string(data)
+
+	// Check for frameworks in order of specificity
+	frameworks := map[string]string{
+		"next":    "NEXT",
+		"vite":    "VITE",
+		"svelte":  "SVELTE",
+		"react":   "REACT",
+		"vue":     "VUE",
+		"angular": "ANGULAR",
+	}
+
+	for keyword, framework := range frameworks {
+		if strings.Contains(content, keyword) {
+			return framework
 		}
 	}
+
 	return "OTHER"
 }
 
 // PromptForProjectCreationDetails asks the user for a project name, checks if it exists, and
 // gets Git repo info. Returns project details and a flag indicating if the user is using an existing project.
 func PromptForProjectCreationDetails() (string, string, string, *types.Project, bool, error) {
+	// Use centralized survey options to fix PowerShell echo issues
+	opts := utils.GetSurveyOptions()
+
 	// Get project name
 	var projectName string
 	prompt := &survey.Input{
 		Message: "Enter a name for your project:",
 	}
-	if err := survey.AskOne(prompt, &projectName); err != nil {
+
+	if err := survey.AskOne(prompt, &projectName, opts); err != nil {
 		return "", "", "", nil, false, fmt.Errorf("error getting project name: %v", err)
 	}
 
@@ -449,7 +474,7 @@ func PromptForProjectCreationDetails() (string, string, string, *types.Project, 
 			Message: "Do you want to use this existing project?",
 			Default: true,
 		}
-		survey.AskOne(confirmPrompt, &useExisting)
+		survey.AskOne(confirmPrompt, &useExisting, opts)
 
 		if useExisting {
 			// User wants to use the existing project
@@ -459,7 +484,7 @@ func PromptForProjectCreationDetails() (string, string, string, *types.Project, 
 		return "", "", "", nil, false, fmt.Errorf("a project with this name already exists, please choose a different name")
 	}
 
-	// Ask whether to auto-detect git repo or enter manually
+	// Ask user how they want to specify the Git repository
 	repoOptions := []string{
 		"Auto-detect Git repository from current directory",
 		"Manually enter Git repository URL",
@@ -470,10 +495,57 @@ func PromptForProjectCreationDetails() (string, string, string, *types.Project, 
 		Options: repoOptions,
 		Default: 0,
 	}
-	if err := survey.AskOne(repoPrompt, &repoOptionIndex); err != nil {
+
+	if err := survey.AskOne(repoPrompt, &repoOptionIndex, opts); err != nil {
 		return "", "", "", nil, false, fmt.Errorf("error getting repository option: %v", err)
 	}
 
-	// Return but leave getting repository info to the caller
-	return projectName, "", "", nil, false, nil
+	var repoURL string
+
+	if repoOptionIndex == 1 {
+		// Manual entry - prompt for URL
+		var repoURLInput string
+		repoPromptInput := &survey.Input{
+			Message: "Enter your Git repository URL:",
+		}
+
+		if err := survey.AskOne(repoPromptInput, &repoURLInput, opts); err != nil {
+			return "", "", "", nil, false, fmt.Errorf("error getting repository URL: %v", err)
+		}
+
+		if strings.TrimSpace(repoURLInput) == "" {
+			return "", "", "", nil, false, fmt.Errorf("repository URL cannot be empty")
+		}
+
+		repoURL = strings.TrimSpace(repoURLInput)
+	} else {
+		// Auto-detect from current directory
+		var autoErr error
+		repoURL, autoErr = autoDetectRepoURL()
+		if autoErr != nil {
+			// If auto-detect fails, prompt user to enter URL manually
+			utils.WarnColor.Printf("Auto-detection failed: %v\n", autoErr)
+			utils.InfoColor.Println("Please enter your Git repository URL manually:")
+
+			var repoURLInput string
+			repoPromptInput := &survey.Input{
+				Message: "Enter your Git repository URL:",
+			}
+
+			if err := survey.AskOne(repoPromptInput, &repoURLInput, opts); err != nil {
+				return "", "", "", nil, false, fmt.Errorf("error getting repository URL: %v", err)
+			}
+
+			if strings.TrimSpace(repoURLInput) == "" {
+				return "", "", "", nil, false, fmt.Errorf("repository URL cannot be empty")
+			}
+
+			repoURL = strings.TrimSpace(repoURLInput)
+		}
+	}
+
+	// Detect framework
+	framework := DetectFramework()
+
+	return projectName, repoURL, framework, nil, false, nil
 }

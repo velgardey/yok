@@ -2,8 +2,10 @@ package config
 
 import (
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 
 	"github.com/velgardey/yok/cli/internal/types"
 	"github.com/velgardey/yok/cli/internal/utils"
@@ -11,25 +13,40 @@ import (
 
 // SaveConfig saves the configuration to a local file
 func SaveConfig(config types.Config) error {
-	jsonData, err := json.Marshal(config)
-	if err != nil {
-		return err
+	// Validate configuration before saving
+	if err := ValidateConfig(config); err != nil {
+		return fmt.Errorf("invalid configuration: %w", err)
 	}
-	return os.WriteFile(utils.ConfigFile, jsonData, 0644)
+
+	jsonData, err := json.MarshalIndent(config, "", "  ")
+	if err != nil {
+		return fmt.Errorf("failed to marshal config: %w", err)
+	}
+
+	if err := os.WriteFile(utils.ConfigFile, jsonData, 0644); err != nil {
+		return fmt.Errorf("failed to write config file: %w", err)
+	}
+
+	return nil
 }
 
 // LoadConfig loads configuration from a local file
 func LoadConfig() (types.Config, error) {
 	var config types.Config
+
 	data, err := os.ReadFile(utils.ConfigFile)
 	if err != nil {
 		if os.IsNotExist(err) {
 			return config, nil // Return empty config if file doesn't exist
 		}
-		return config, err
+		return config, fmt.Errorf("failed to read config file: %w", err)
 	}
-	err = json.Unmarshal(data, &config)
-	return config, err
+
+	if err := json.Unmarshal(data, &config); err != nil {
+		return config, fmt.Errorf("failed to parse config file: %w", err)
+	}
+
+	return config, nil
 }
 
 // GetProjectIDOrExit loads the config and exits if no project ID is found
@@ -49,9 +66,47 @@ func GetProjectIDOrExit() types.Config {
 func RemoveConfig() error {
 	cwd, err := os.Getwd()
 	if err != nil {
-		return err
+		return fmt.Errorf("failed to get current directory: %w", err)
 	}
 
 	configFilePath := filepath.Join(cwd, utils.ConfigFile)
-	return os.RemoveAll(configFilePath)
+	if err := os.RemoveAll(configFilePath); err != nil {
+		return fmt.Errorf("failed to remove config file: %w", err)
+	}
+
+	return nil
+}
+
+// ValidateConfig validates the configuration data
+func ValidateConfig(config types.Config) error {
+	if strings.TrimSpace(config.ProjectID) == "" {
+		return fmt.Errorf("project ID cannot be empty")
+	}
+
+	if strings.TrimSpace(config.RepoName) == "" {
+		return fmt.Errorf("repository name cannot be empty")
+	}
+
+	return nil
+}
+
+// GetConfigPath returns the full path to the configuration file
+func GetConfigPath() (string, error) {
+	cwd, err := os.Getwd()
+	if err != nil {
+		return "", fmt.Errorf("failed to get current directory: %w", err)
+	}
+
+	return filepath.Join(cwd, utils.ConfigFile), nil
+}
+
+// ConfigExists checks if a configuration file exists
+func ConfigExists() bool {
+	configPath, err := GetConfigPath()
+	if err != nil {
+		return false
+	}
+
+	_, err = os.Stat(configPath)
+	return err == nil
 }

@@ -2,14 +2,12 @@ package cmd
 
 import (
 	"fmt"
-	"io"
 	"net/http"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"runtime"
 	"strings"
-	"time"
 
 	"github.com/AlecAivazis/survey/v2"
 	"github.com/blang/semver"
@@ -46,39 +44,50 @@ func checkForUpdates() (*selfupdate.Release, bool, error) {
 	return latest, latest.Version.GT(v), nil
 }
 
-// backupCurrentBinary creates a backup copy of the binary
-func backupCurrentBinary(execPath string) (string, error) {
-	backupPath := execPath + ".backup"
-	os.Remove(backupPath) // Remove existing backup if present
+// getCurrentVersion returns the current version without the 'v' prefix
+func getCurrentVersion() string {
+	return strings.TrimPrefix(version, "v")
+}
 
-	// Copy file
-	source, err := os.Open(execPath)
+// getLatestVersionNoAPI makes an HTTP request to GitHub releases page
+// and extracts the latest version from the redirect URL
+func getLatestVersionNoAPI() (string, error) {
+	client := utils.CreateHTTPClient()
+
+	// Disable following redirects so we can capture the redirect URL
+	client.CheckRedirect = func(req *http.Request, via []*http.Request) error {
+		return http.ErrUseLastResponse
+	}
+
+	resp, err := client.Get("https://github.com/velgardey/yok/releases/latest")
 	if err != nil {
-		return "", fmt.Errorf("failed to open current binary: %w", err)
+		return "", fmt.Errorf("failed to fetch latest release: %w", err)
 	}
-	defer source.Close()
+	defer resp.Body.Close()
 
-	backup, err := os.OpenFile(backupPath, os.O_RDWR|os.O_CREATE|os.O_TRUNC, 0755)
-	if err != nil {
-		return "", fmt.Errorf("failed to create backup file: %w", err)
-	}
-	defer backup.Close()
-
-	if _, err = io.Copy(backup, source); err != nil {
-		return "", fmt.Errorf("failed to copy binary to backup: %w", err)
+	// Check response status
+	if resp.StatusCode != http.StatusFound {
+		return "", fmt.Errorf("unexpected status code: %d", resp.StatusCode)
 	}
 
-	// Match permissions
-	info, err := os.Stat(execPath)
-	if err != nil {
-		return "", fmt.Errorf("failed to get file info: %w", err)
+	// Extract version from the Location header
+	location := resp.Header.Get("Location")
+	if location == "" {
+		return "", fmt.Errorf("no redirect location found")
 	}
 
-	if err := os.Chmod(backupPath, info.Mode()); err != nil {
-		return "", fmt.Errorf("failed to set backup permissions: %w", err)
+	// Parse version from URL
+	parts := strings.Split(location, "/")
+	if len(parts) == 0 {
+		return "", fmt.Errorf("invalid redirect URL format")
 	}
 
-	return backupPath, nil
+	version := parts[len(parts)-1]
+	if !strings.HasPrefix(version, "v") {
+		return "", fmt.Errorf("invalid version format: %s", version)
+	}
+
+	return strings.TrimPrefix(version, "v"), nil
 }
 
 // detectInstallLocation returns the appropriate directory for binary installation
@@ -188,363 +197,6 @@ func isRunningWithSudo() bool {
 	return false
 }
 
-// hasAdminPrivileges checks if the current process has administrator privileges on Windows
-func hasAdminPrivileges() bool {
-	if runtime.GOOS != "windows" {
-		return false
-	}
-
-	// Try multiple methods to detect admin privileges
-
-	// Method 1: Try writing to a protected location
-	testFile := filepath.Join(os.Getenv("PROGRAMFILES"), ".yok_admin_test")
-	file, err := os.OpenFile(testFile, os.O_RDWR|os.O_CREATE, 0666)
-	if err == nil {
-		file.Close()
-		os.Remove(testFile)
-		return true
-	}
-
-	// Method 2: Check using PowerShell (more reliable)
-	cmd := exec.Command("powershell", "-Command", "[bool](([System.Security.Principal.WindowsIdentity]::GetCurrent()).groups -match 'S-1-5-32-544')")
-	output, err := cmd.Output()
-	if err == nil && strings.TrimSpace(string(output)) == "True" {
-		return true
-	}
-
-	return false
-}
-
-// runWindowsUpdate implements the Spawned Process Pattern for Windows updates
-func runWindowsUpdate(execPath string, latest *selfupdate.Release) error {
-	// Create a temporary updater script
-	tmpDir := os.TempDir()
-	updateBatchPath := filepath.Join(tmpDir, "yok_update.bat")
-
-	// Get our process ID and directory info
-	pid := os.Getpid()
-	execDir := filepath.Dir(execPath)
-
-	// Create the updater script following the Spawned Process Pattern
-	batchContent := fmt.Sprintf(`@echo off
-title Yok CLI Update Process
-color 0A
-echo Yok CLI Update Process
-echo ====================
-echo.
-
-rem Step 1: Wait for main process to terminate
-echo Waiting for Yok CLI to exit (PID: %d)...
-:wait_loop
-timeout /t 1 /nobreak > nul
-tasklist | find " %d " > nul 2>&1
-if not errorlevel 1 goto wait_loop
-echo Main process exited, continuing with update.
-echo.
-
-rem Step 2: Download the update if not already downloaded
-if not exist "%s.new" (
-    echo Downloading update from %s...
-    
-    rem Use PowerShell for more reliable downloads and error handling
-    powershell -Command "
-        $ErrorActionPreference = 'Stop'
-        $ProgressPreference = 'SilentlyContinue'
-        try {
-            # Ensure we get Windows-compatible binaries by setting proper headers
-            $headers = @{'Accept' = 'application/octet-stream'}
-            # Get the appropriate asset URL for Windows/amd64
-            Invoke-WebRequest -Uri '%s' -Headers $headers -OutFile '%s.new' -UseBasicParsing
-            
-            # Verify file is a valid Windows executable
-            $bytes = Get-Content '%s.new' -Encoding Byte -TotalCount 2
-            if ($bytes[0] -ne 77 -or $bytes[1] -ne 90) {
-                Write-Host 'Error: Downloaded file is not a valid Windows executable (missing MZ header)' -ForegroundColor Red
-                exit 1
-            }
-            
-            Write-Host 'Download completed and verified.'
-        } catch {
-            Write-Host ('Error downloading: ' + $_.Exception.Message) -ForegroundColor Red
-            exit 1
-        }
-    "
-    
-    if errorlevel 1 (
-        echo Failed to download update or invalid executable downloaded.
-        echo Please check your internet connection and try again.
-        pause
-        exit /b 1
-    )
-    echo Download completed and verified successfully.
-)
-
-rem Step 3: Replace the executable file
-echo.
-echo Installing update...
-echo Target location: %s
-
-rem Ensure target directory exists
-if not exist "%s" (
-    mkdir "%s"
-    echo Created directory: %s
-)
-
-rem Create backup of current executable if it exists
-if exist "%s" (
-    echo Creating backup...
-    copy /y "%s" "%s.backup" > nul 2>&1
-    if errorlevel 1 (
-        echo Warning: Could not create backup.
-    ) else (
-        echo Backup created successfully at %s.backup
-    )
-)
-
-rem Make multiple attempts to replace the file
-set MAX_ATTEMPTS=3
-set ATTEMPT=1
-
-:replace_loop
-echo Attempt %%ATTEMPT%% of %%MAX_ATTEMPTS%%...
-
-rem Wait briefly to ensure any file handles are released
-timeout /t 1 > nul
-
-rem First check if the downloaded file is valid
-powershell -Command "
-    try {
-        $bytes = Get-Content '%s.new' -Encoding Byte -TotalCount 2 -ErrorAction Stop
-        if ($bytes[0] -ne 77 -or $bytes[1] -ne 90) {
-            Write-Host 'Error: Downloaded file is not a valid Windows executable (missing MZ header)' -ForegroundColor Red
-            exit 1
-        }
-    } catch {
-        Write-Host 'Error reading downloaded file. It may be corrupt.' -ForegroundColor Red
-        exit 1
-    }
-" > nul 2>&1
-if errorlevel 1 (
-    echo Error: The downloaded update is not a valid Windows executable.
-    echo This may be due to a corrupted download or network issue.
-    echo Please try running the update command again.
-    pause
-    exit /b 1
-)
-
-rem Try direct move first
-move /y "%s.new" "%s" > nul 2>&1
-if not errorlevel 1 (
-    echo File replaced successfully.
-    goto verify_file
-)
-
-rem If move fails, try copy and delete
-copy /y "%s.new" "%s" > nul 2>&1
-if not errorlevel 1 (
-    del "%s.new" > nul 2>&1
-    echo File replaced with copy method.
-    goto verify_file
-)
-
-rem Try PowerShell force copy as another method
-powershell -Command "
-    try {
-        Copy-Item -Path '%s.new' -Destination '%s' -Force -ErrorAction Stop
-        Write-Host 'Copy successful'
-    } catch {
-        Write-Host ('Copy failed: ' + $_.Exception.Message)
-        exit 1
-    }
-"
-if not errorlevel 1 (
-    if exist "%s.new" del "%s.new" > nul 2>&1
-    echo File replaced with PowerShell method.
-    goto verify_file
-)
-
-rem If still not successful, increment attempt and try again
-set /a ATTEMPT=ATTEMPT+1
-if %%ATTEMPT%% leq %%MAX_ATTEMPTS%% (
-    echo Replacement attempt failed, retrying after a delay...
-    timeout /t 2 > nul
-    goto replace_loop
-)
-
-rem All attempts failed
-echo.
-echo Failed to replace the executable after %%MAX_ATTEMPTS%% attempts.
-echo The update file is still available at: %s.new
-echo.
-echo Possible causes:
-echo - The file is still in use by another process
-echo - You don't have sufficient permissions
-echo - Anti-virus software is blocking the operation
-echo.
-pause
-exit /b 1
-
-:verify_file
-echo.
-echo Verifying file was correctly installed...
-if not exist "%s" (
-    echo ERROR: File not found at expected location.
-    echo Expected: %s
-    echo.
-    echo Checking permissions and trying to recover...
-    
-    if exist "%s.new" (
-        echo Found update file. Trying alternative copy method...
-        powershell -Command "Copy-Item -Path '%s.new' -Destination '%s' -Force -ErrorAction SilentlyContinue"
-        
-        if exist "%s" (
-            echo ✅ Recovery successful.
-        ) else (
-            echo ❌ Recovery failed.
-        )
-    )
-    
-    if exist "%s.backup" (
-        echo Backup file exists. You may need to manually restore from: %s.backup
-    )
-    pause
-    exit /b 1
-)
-
-rem Verify the executable is valid
-powershell -Command "
-    try {
-        $bytes = Get-Content '%s' -Encoding Byte -TotalCount 2 -ErrorAction Stop
-        if ($bytes[0] -ne 77 -or $bytes[1] -ne 90) {
-            Write-Host 'Error: Installed file is not a valid Windows executable (missing MZ header)' -ForegroundColor Red
-            exit 1
-        }
-        Write-Host 'Executable verified successfully.'
-    } catch {
-        Write-Host ('Error verifying file: ' + $_.Exception.Message) -ForegroundColor Red
-        exit 1
-    }
-" > nul 2>&1
-if errorlevel 1 (
-    echo ERROR: The installed executable appears to be invalid or corrupted.
-    echo Attempting to restore from backup...
-    if exist "%s.backup" (
-        move /y "%s.backup" "%s" > nul 2>&1
-        echo Restored from backup. Please try the update again.
-    ) else {
-        echo No backup available. You may need to reinstall Yok CLI.
-    )
-    pause
-    exit /b 1
-)
-
-echo ✅ File exists at correct location and is a valid Windows executable.
-
-echo.
-echo ✅ Yok CLI has been updated to %s successfully!
-echo.
-
-rem Add installation directory to PATH if not already present
-echo Checking if installation directory is in PATH...
-setlocal EnableDelayedExpansion
-set INSTALL_DIR=%s
-set PATH_UPDATED=false
-echo %%PATH%% | findstr /C:"!INSTALL_DIR!" >nul 2>&1
-if errorlevel 1 (
-    echo Adding installation directory to PATH...
-    powershell -Command "
-        try {
-            $currentPath = [Environment]::GetEnvironmentVariable('PATH', 'User')
-            $installDir = '%s'
-            if (-not $currentPath.Contains($installDir)) {
-                [Environment]::SetEnvironmentVariable('PATH', $currentPath + ';' + $installDir, 'User')
-                Write-Host 'Installation directory added to PATH.'
-                exit 0
-            } else {
-                Write-Host 'Installation directory already in PATH.'
-                exit 0
-            }
-        } catch {
-            Write-Host ('Error updating PATH: ' + $_.Exception.Message)
-            exit 1
-        }
-    "
-    if errorlevel 0 (
-        set PATH_UPDATED=true
-        echo PATH updated successfully.
-    ) else (
-        echo Failed to update PATH. You may need to add it manually.
-    )
-) else (
-    echo Installation directory is already in PATH.
-)
-
-rem Step 4: Launch the new version (optional)
-echo.
-set LAUNCH_APP=n
-set /p LAUNCH_APP="Would you like to launch Yok CLI now? (y/n): "
-if /i "%%LAUNCH_APP%%" == "y" (
-    echo Starting Yok CLI...
-    cd /d "%%USERPROFILE%%"
-    
-    if "!PATH_UPDATED!" == "true" (
-        echo Refreshing PATH for this session...
-        set "PATH=%%PATH%%;%s"
-    )
-    
-    rem Try with full path
-    "%s" version
-    if errorlevel 1 (
-        echo Failed to launch with full path. Trying with command name...
-        yok version
-        if errorlevel 1 (
-            echo Failed to launch. You might need to open a new command prompt.
-            echo You can run the CLI using the full path: %s
-        )
-    )
-)
-
-echo.
-echo Update completed! You can now use 'yok' to run the updated version.
-if "!PATH_UPDATED!" == "true" (
-    echo NOTE: You may need to restart your command prompt for PATH changes to take effect.
-)
-echo.
-pause
-`, pid, pid, execPath, latest.URL, latest.AssetURL, execPath, execPath, execPath, execDir, execDir, execDir, execPath, execPath, execPath, execPath, execPath, execPath, execPath, execPath, execPath, execPath, execPath, execPath, execPath, execPath, execPath, execPath, execPath, execPath, execPath, execPath, execPath, execPath, execPath, execPath, execPath, execPath, latest.Version, execDir, execDir, execDir, execPath, execPath)
-
-	// Write the batch file
-	if err := os.WriteFile(updateBatchPath, []byte(batchContent), 0700); err != nil {
-		return fmt.Errorf("failed to create update script: %v", err)
-	}
-
-	// Request elevated privileges if needed and start the updater process
-	var cmd *exec.Cmd
-	if !hasAdminPrivileges() {
-		utils.InfoColor.Println("Requesting administrator privileges for update...")
-		cmd = exec.Command("powershell", "-Command",
-			fmt.Sprintf("Start-Process cmd -ArgumentList '/k', '\"%s\"' -Verb RunAs", updateBatchPath))
-	} else {
-		cmd = exec.Command("cmd", "/c", "start", "cmd", "/k", updateBatchPath)
-	}
-
-	if err := cmd.Start(); err != nil {
-		os.Remove(updateBatchPath)
-		return fmt.Errorf("failed to start update process: %v", err)
-	}
-
-	// Inform the user
-	utils.InfoColor.Println("Update process started in a new window.")
-	fmt.Println("The update will complete after this window closes.")
-	fmt.Println("Please wait for the update process to finish.")
-
-	// Exit the main application to allow the updater to work
-	time.Sleep(1 * time.Second)
-	os.Exit(0)
-
-	return nil // This line never executes but is needed for compilation
-}
-
 // runUnixUpdate handles the update process for Unix-based systems (Linux/macOS)
 func runUnixUpdate(execPath string, latest *selfupdate.Release) error {
 	utils.InfoColor.Println("This operation requires elevated privileges.")
@@ -576,7 +228,7 @@ chmod +x "%s.new"
 echo "Installing update..."
 mv "%s.new" "%s"
 
-echo "✅ Yok CLI has been updated to %s successfully!"
+echo "[OK] Yok CLI has been updated to %s successfully!"
 echo "Run 'yok version' to verify the update."
 `, latest.URL, execPath, latest.AssetURL, execPath, execPath, execPath, latest.Version)
 
@@ -599,6 +251,156 @@ echo "Run 'yok version' to verify the update."
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
 	return cmd.Run()
+}
+
+// createWindowsUpdateScript generates a PowerShell script for updating the Windows binary
+func createWindowsUpdateScript(targetPath, version string) (string, error) {
+	// Create a temp file for the update script
+	tmpDir := os.TempDir()
+	scriptPath := filepath.Join(tmpDir, "yok_update.ps1")
+
+	// Format the download URL based on version
+	downloadUrl := fmt.Sprintf("https://github.com/velgardey/yok/releases/download/v%s/yok_%s_windows_amd64.zip",
+		version, version)
+
+	// Create backup path
+	backupPath := targetPath + ".backup"
+
+	// Build the script content without complex formatting
+	scriptContent := []string{
+		"# Yok CLI Self-Update Script",
+		"$ErrorActionPreference = \"Stop\"",
+		"$ProgressPreference = \"SilentlyContinue\"  # Makes downloads faster",
+		"",
+		"# Function to handle errors",
+		"function Handle-Error {",
+		"    param(",
+		"        [Parameter(Mandatory=$true)][string]$ErrorMessage,",
+		"        [Parameter(Mandatory=$false)][object]$ErrorDetail = $null",
+		"    )",
+		"    ",
+		"    Write-Host \"`n====== ERROR ======\" -ForegroundColor Red",
+		"    Write-Host $ErrorMessage -ForegroundColor Red",
+		"    ",
+		"    if ($ErrorDetail) {",
+		"        Write-Host \"`nError details:\" -ForegroundColor Red",
+		"        Write-Host $ErrorDetail.Exception.Message -ForegroundColor Red",
+		"    }",
+		"    ",
+		"    # Restore from backup if available",
+		fmt.Sprintf("    if (Test-Path \"%s\") {", backupPath),
+		"        Write-Host \"Restoring from backup...\" -ForegroundColor Yellow",
+		"        try {",
+		fmt.Sprintf("            Copy-Item -Path \"%s\" -Destination \"%s\" -Force", backupPath, targetPath),
+		"            Write-Host \"Restored successfully.\" -ForegroundColor Green",
+		"        } catch {",
+		"            Write-Host \"Failed to restore from backup: $_\" -ForegroundColor Red",
+		"        }",
+		"    }",
+		"    ",
+		"    # Cleanup ",
+		"    if (Test-Path \"$env:TEMP\\yok_update\") {",
+		"        Remove-Item -Path \"$env:TEMP\\yok_update\" -Recurse -Force -ErrorAction SilentlyContinue",
+		"    }",
+		"    ",
+		"    # Self-delete after delay - give time to read error",
+		"    Start-Sleep -Seconds 5",
+		"    Remove-Item -Path $PSCommandPath -Force -ErrorAction SilentlyContinue",
+		"    exit 1",
+		"}",
+		"",
+		"try {",
+		"    # Wait for the main process to exit",
+		"    Start-Sleep -Seconds 2",
+		"    ",
+		fmt.Sprintf("    Write-Host \"Updating Yok CLI to v%s...\" -ForegroundColor Cyan", version),
+		"    ",
+		"    # Create temp directory for update",
+		"    $updateDir = \"$env:TEMP\\yok_update\"",
+		"    if (Test-Path $updateDir) {",
+		"        Remove-Item -Path $updateDir -Recurse -Force",
+		"    }",
+		"    New-Item -ItemType Directory -Path $updateDir -Force | Out-Null",
+		"    ",
+		"    # Download the update",
+		"    $zipPath = \"$updateDir\\yok.zip\"",
+		fmt.Sprintf("    Write-Host \"Downloading update from %s...\" -ForegroundColor Cyan", downloadUrl),
+		"    try {",
+		fmt.Sprintf("        Invoke-WebRequest -Uri \"%s\" -OutFile $zipPath", downloadUrl),
+		"    } catch {",
+		"        Handle-Error \"Failed to download the update package\" $_",
+		"    }",
+		"    ",
+		"    # Create backup of current executable",
+		"    Write-Host \"Creating backup...\" -ForegroundColor Cyan",
+		"    try {",
+		fmt.Sprintf("        Copy-Item -Path \"%s\" -Destination \"%s\" -Force", targetPath, backupPath),
+		"    } catch {",
+		"        Handle-Error \"Failed to create backup\" $_",
+		"    }",
+		"    ",
+		"    # Extract and replace the binary",
+		"    Write-Host \"Installing update...\" -ForegroundColor Cyan",
+		"    try {",
+		"        Expand-Archive -Path $zipPath -DestinationPath $updateDir -Force",
+		fmt.Sprintf("        Copy-Item -Path \"$updateDir\\yok.exe\" -Destination \"%s\" -Force", targetPath),
+		"    } catch {",
+		"        Handle-Error \"Failed to install the update\" $_",
+		"    }",
+		"    ",
+		"    # Cleanup",
+		"    Write-Host \"Cleaning up...\" -ForegroundColor Cyan",
+		"    Remove-Item -Path $updateDir -Recurse -Force -ErrorAction SilentlyContinue",
+		"    ",
+		fmt.Sprintf("    Write-Host \"`n[OK] Yok CLI has been updated to v%s successfully!\" -ForegroundColor Green", version),
+		"    Write-Host \"Run 'yok version' to verify the update.\" -ForegroundColor Cyan",
+		"    ",
+		"    # Self-delete after a delay",
+		"    Start-Sleep -Seconds 1",
+		"    Remove-Item -Path $PSCommandPath -Force -ErrorAction SilentlyContinue",
+		"} catch {",
+		"    Handle-Error \"An unexpected error occurred during update\" $_",
+		"}",
+	}
+
+	// Join the script lines with newlines
+	script := strings.Join(scriptContent, "\n")
+
+	// Write the script to disk
+	err := os.WriteFile(scriptPath, []byte(script), 0700)
+	if err != nil {
+		return "", fmt.Errorf("failed to create update script: %v", err)
+	}
+
+	return scriptPath, nil
+}
+
+// runWindowsUpdate handles the update process for Windows
+func runWindowsUpdate(execPath string, version string) error {
+	// Create the PowerShell script
+	scriptPath, err := createWindowsUpdateScript(execPath, version)
+	if err != nil {
+		return err
+	}
+
+	utils.InfoColor.Println("Starting update process...")
+	utils.InfoColor.Println("The CLI will exit and a new process will complete the update.")
+
+	// Launch PowerShell script as a separate process
+	cmd := exec.Command("powershell.exe", "-ExecutionPolicy", "Bypass", "-File", scriptPath)
+	cmd.Stdin = os.Stdin
+	cmd.Stdout = os.Stdout
+	cmd.Stderr = os.Stderr
+
+	// Start (not Run) to avoid waiting for completion
+	if err := cmd.Start(); err != nil {
+		return fmt.Errorf("failed to start update process: %v", err)
+	}
+
+	// Exit immediately after starting the update process
+	fmt.Println("Update in progress... please wait.")
+	os.Exit(0)
+	return nil // This is never reached
 }
 
 // runSelfUpdate implements the update logic
@@ -625,21 +427,58 @@ func runSelfUpdate(cmd *cobra.Command, force bool, checkOnly bool) error {
 		}
 	}
 
+	// For Windows, we'll use a different approach without requiring the GitHub API
+	var currentVersion, latestVersionStr string
+	var hasUpdate bool
+	var latest *selfupdate.Release
+	var err error
+
+	currentVersion = getCurrentVersion()
+
 	// Check for updates
 	spinner := utils.StartSpinner("Checking for updates...")
-	latest, hasUpdate, err := checkForUpdates()
-	utils.StopSpinner(spinner)
 
-	if err != nil {
-		return fmt.Errorf("failed to check for updates: %w", err)
+	if runtime.GOOS == "windows" {
+		// Use non-API method for Windows
+		latestVersionStr, err = getLatestVersionNoAPI()
+		if err != nil {
+			utils.StopSpinner(spinner)
+			return fmt.Errorf("failed to check for updates: %w", err)
+		}
+
+		// Parse versions for comparison
+		currentSemver, err := semver.Parse(currentVersion)
+		if err != nil {
+			if currentVersion == "dev" || currentVersion == "development" {
+				hasUpdate = true // Always update dev versions
+			} else {
+				utils.StopSpinner(spinner)
+				return fmt.Errorf("failed to parse current version: %w", err)
+			}
+		} else {
+			latestSemver, err := semver.Parse(latestVersionStr)
+			if err != nil {
+				utils.StopSpinner(spinner)
+				return fmt.Errorf("failed to parse latest version: %w", err)
+			}
+			hasUpdate = latestSemver.GT(currentSemver)
+		}
+	} else {
+		// Use the existing API-based method for non-Windows
+		latest, hasUpdate, err = checkForUpdates()
+		if err != nil {
+			utils.StopSpinner(spinner)
+			return fmt.Errorf("failed to check for updates: %w", err)
+		}
+		latestVersionStr = latest.Version.String()
 	}
 
-	currentVersion := strings.TrimPrefix(version, "v")
+	utils.StopSpinner(spinner)
 
 	// Just checking for updates
 	if checkOnly {
 		if hasUpdate {
-			utils.InfoColor.Printf("\nUpdate available: %s (current: %s)\n", latest.Version, currentVersion)
+			utils.InfoColor.Printf("\nUpdate available: v%s (current: %s)\n", latestVersionStr, currentVersion)
 			fmt.Printf("Run 'yok self-update' to update to the latest version\n")
 		} else {
 			utils.SuccessColor.Printf("You're already using the latest version (v%s)\n", currentVersion)
@@ -656,17 +495,24 @@ func runSelfUpdate(cmd *cobra.Command, force bool, checkOnly bool) error {
 	// Display update information
 	utils.InfoColor.Printf("\nAvailable update:\n")
 	fmt.Printf("Current version: v%s\n", currentVersion)
-	fmt.Printf("Latest version: %s\n", latest.Version)
-	fmt.Printf("Release page: %s\n", latest.URL)
+	fmt.Printf("Latest version: v%s\n", latestVersionStr)
+
+	// Show release page URL based on platform
+	if runtime.GOOS == "windows" {
+		fmt.Printf("Release page: https://github.com/velgardey/yok/releases/tag/v%s\n", latestVersionStr)
+	} else if latest != nil {
+		fmt.Printf("Release page: %s\n", latest.URL)
+	}
 
 	// Confirm update unless forced
 	if !force {
 		updateConfirm := false
 		updatePrompt := &survey.Confirm{
-			Message: fmt.Sprintf("Do you want to update from v%s to %s?", currentVersion, latest.Version),
+			Message: fmt.Sprintf("Do you want to update from v%s to v%s?", currentVersion, latestVersionStr),
 			Default: true,
 		}
-		if err := survey.AskOne(updatePrompt, &updateConfirm); err != nil {
+		opts := utils.GetSurveyOptions()
+		if err := survey.AskOne(updatePrompt, &updateConfirm, opts); err != nil {
 			return fmt.Errorf("update cancelled: %v", err)
 		}
 
@@ -707,85 +553,14 @@ func runSelfUpdate(cmd *cobra.Command, force bool, checkOnly bool) error {
 
 	targetPath := filepath.Join(installDir, targetName)
 
-	// Special platform-specific handling
+	// Handle platform-specific update
 	if runtime.GOOS == "windows" {
-		// For Windows, use the Spawned Process Pattern
-		return runWindowsUpdate(targetPath, latest)
-	} else {
-		// For Unix systems, check if we need elevation
-		if !hasWritePermission(targetPath) && !sudoMode {
-			if sudoFlag {
-				return fmt.Errorf("failed to get write permission even with elevated privileges")
-			}
-			return runUnixUpdate(targetPath, latest)
-		}
-
-		// Create backup if target exists
-		backupPath := ""
-		if _, err := os.Stat(targetPath); err == nil {
-			backupPath, err = backupCurrentBinary(targetPath)
-			if err != nil {
-				utils.WarnColor.Printf("Warning: Failed to create backup: %v\n", err)
-				if !force {
-					continueWithoutBackup := false
-					backupPrompt := &survey.Confirm{
-						Message: "Failed to create backup. Continue with update anyway?",
-						Default: false,
-					}
-					if err := survey.AskOne(backupPrompt, &continueWithoutBackup); err != nil || !continueWithoutBackup {
-						return fmt.Errorf("update cancelled: could not create backup")
-					}
-				}
-			} else {
-				utils.InfoColor.Printf("Created backup at: %s\n", backupPath)
-			}
-		}
-
-		// Run update
-		utils.InfoColor.Printf("Updating Yok CLI from v%s to %s\n", currentVersion, latest.Version)
-		spinner = utils.StartSpinner("Downloading and installing update...")
-
-		// Use selfupdate.UpdateTo to download and replace the binary
-		err = selfupdate.UpdateTo(latest.AssetURL, targetPath)
-		utils.StopSpinner(spinner)
-
-		if err != nil {
-			// Try to restore from backup
-			if backupPath != "" {
-				utils.WarnColor.Println("Update failed, attempting to restore from backup...")
-				if restoreErr := os.Rename(backupPath, targetPath); restoreErr != nil {
-					utils.ErrorColor.Printf("Failed to restore backup: %v\n", restoreErr)
-					return fmt.Errorf("update failed and backup restoration failed: %v, %v", err, restoreErr)
-				}
-				utils.InfoColor.Println("Successfully restored from backup")
-			}
-			return fmt.Errorf("failed to update binary: %v", err)
-		}
-
-		// Cleanup
-		if backupPath != "" {
-			os.Remove(backupPath)
-		}
-
-		utils.SuccessColor.Printf("✅ Yok CLI has been updated to %s!\n", latest.Version)
-
-		// Display release notes
-		if latest.ReleaseNotes != "" {
-			utils.InfoColor.Println("\nRelease notes:")
-			fmt.Println(latest.ReleaseNotes)
-		}
-
-		// Verify update on Unix systems
-		cmd := exec.Command(targetPath, "--version")
-		output, err := cmd.CombinedOutput()
-		if err == nil {
-			utils.InfoColor.Printf("\nVerified new version: %s", output)
-		} else {
-			utils.WarnColor.Println("Update may not have completed correctly. Please try again or reinstall.")
-		}
+		return runWindowsUpdate(targetPath, latestVersionStr)
+	} else if latest != nil {
+		return runUnixUpdate(targetPath, latest)
 	}
 
-	return nil
+	return fmt.Errorf("update not implemented for this platform")
 }
 
 // Set up the update command
@@ -813,14 +588,13 @@ func init() {
 
 				// Platform-specific troubleshooting tips
 				if runtime.GOOS == "windows" {
-					fmt.Println("3. Try running as administrator (right-click Command Prompt/PowerShell and select 'Run as administrator')")
-					fmt.Println("4. Make sure no other processes are using the Yok CLI executable")
-					fmt.Println("5. Check if your antivirus is blocking the update process")
+					fmt.Println("3. Try running with administrator privileges")
+					fmt.Println("4. Ensure PowerShell execution policy allows running scripts")
 				} else {
 					fmt.Println("3. Try running with elevated privileges (sudo/admin)")
 				}
 
-				fmt.Println("4. Check if GitHub API is accessible from your network")
+				fmt.Println("4. Check if GitHub is accessible from your network")
 
 				os.Exit(1)
 			}
