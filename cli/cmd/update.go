@@ -245,14 +245,38 @@ echo.
 rem Step 2: Download the update if not already downloaded
 if not exist "%s.new" (
     echo Downloading update from %s...
-    powershell -Command "$ProgressPreference = 'SilentlyContinue'; try { Invoke-WebRequest -Uri '%s' -OutFile '%s.new' -UseBasicParsing } catch { exit 1 }"
+    
+    rem Use PowerShell for more reliable downloads and error handling
+    powershell -Command "
+        $ErrorActionPreference = 'Stop'
+        $ProgressPreference = 'SilentlyContinue'
+        try {
+            # Ensure we get Windows-compatible binaries by setting proper headers
+            $headers = @{'Accept' = 'application/octet-stream'}
+            # Get the appropriate asset URL for Windows/amd64
+            Invoke-WebRequest -Uri '%s' -Headers $headers -OutFile '%s.new' -UseBasicParsing
+            
+            # Verify file is a valid Windows executable
+            $bytes = Get-Content '%s.new' -Encoding Byte -TotalCount 2
+            if ($bytes[0] -ne 77 -or $bytes[1] -ne 90) {
+                Write-Host 'Error: Downloaded file is not a valid Windows executable (missing MZ header)' -ForegroundColor Red
+                exit 1
+            }
+            
+            Write-Host 'Download completed and verified.'
+        } catch {
+            Write-Host ('Error downloading: ' + $_.Exception.Message) -ForegroundColor Red
+            exit 1
+        }
+    "
+    
     if errorlevel 1 (
-        echo Failed to download update.
+        echo Failed to download update or invalid executable downloaded.
         echo Please check your internet connection and try again.
         pause
         exit /b 1
     )
-    echo Download completed successfully.
+    echo Download completed and verified successfully.
 )
 
 rem Step 3: Replace the executable file
@@ -287,6 +311,27 @@ echo Attempt %%ATTEMPT%% of %%MAX_ATTEMPTS%%...
 rem Wait briefly to ensure any file handles are released
 timeout /t 1 > nul
 
+rem First check if the downloaded file is valid
+powershell -Command "
+    try {
+        $bytes = Get-Content '%s.new' -Encoding Byte -TotalCount 2 -ErrorAction Stop
+        if ($bytes[0] -ne 77 -or $bytes[1] -ne 90) {
+            Write-Host 'Error: Downloaded file is not a valid Windows executable (missing MZ header)' -ForegroundColor Red
+            exit 1
+        }
+    } catch {
+        Write-Host 'Error reading downloaded file. It may be corrupt.' -ForegroundColor Red
+        exit 1
+    }
+" > nul 2>&1
+if errorlevel 1 (
+    echo Error: The downloaded update is not a valid Windows executable.
+    echo This may be due to a corrupted download or network issue.
+    echo Please try running the update command again.
+    pause
+    exit /b 1
+)
+
 rem Try direct move first
 move /y "%s.new" "%s" > nul 2>&1
 if not errorlevel 1 (
@@ -303,7 +348,15 @@ if not errorlevel 1 (
 )
 
 rem Try PowerShell force copy as another method
-powershell -Command "Copy-Item -Path '%s.new' -Destination '%s' -Force -ErrorAction SilentlyContinue"
+powershell -Command "
+    try {
+        Copy-Item -Path '%s.new' -Destination '%s' -Force -ErrorAction Stop
+        Write-Host 'Copy successful'
+    } catch {
+        Write-Host ('Copy failed: ' + $_.Exception.Message)
+        exit 1
+    }
+"
 if not errorlevel 1 (
     if exist "%s.new" del "%s.new" > nul 2>&1
     echo File replaced with PowerShell method.
@@ -326,6 +379,7 @@ echo.
 echo Possible causes:
 echo - The file is still in use by another process
 echo - You don't have sufficient permissions
+echo - Anti-virus software is blocking the operation
 echo.
 pause
 exit /b 1
@@ -333,9 +387,7 @@ exit /b 1
 :verify_file
 echo.
 echo Verifying file was correctly installed...
-if exist "%s" (
-    echo ✅ File exists at correct location.
-) else (
+if not exist "%s" (
     echo ERROR: File not found at expected location.
     echo Expected: %s
     echo.
@@ -355,56 +407,111 @@ if exist "%s" (
     if exist "%s.backup" (
         echo Backup file exists. You may need to manually restore from: %s.backup
     )
+    pause
+    exit /b 1
 )
+
+rem Verify the executable is valid
+powershell -Command "
+    try {
+        $bytes = Get-Content '%s' -Encoding Byte -TotalCount 2 -ErrorAction Stop
+        if ($bytes[0] -ne 77 -or $bytes[1] -ne 90) {
+            Write-Host 'Error: Installed file is not a valid Windows executable (missing MZ header)' -ForegroundColor Red
+            exit 1
+        }
+        Write-Host 'Executable verified successfully.'
+    } catch {
+        Write-Host ('Error verifying file: ' + $_.Exception.Message) -ForegroundColor Red
+        exit 1
+    }
+" > nul 2>&1
+if errorlevel 1 (
+    echo ERROR: The installed executable appears to be invalid or corrupted.
+    echo Attempting to restore from backup...
+    if exist "%s.backup" (
+        move /y "%s.backup" "%s" > nul 2>&1
+        echo Restored from backup. Please try the update again.
+    ) else {
+        echo No backup available. You may need to reinstall Yok CLI.
+    )
+    pause
+    exit /b 1
+)
+
+echo ✅ File exists at correct location and is a valid Windows executable.
 
 echo.
 echo ✅ Yok CLI has been updated to %s successfully!
 echo.
 
-rem Ensure the file is in PATH or inform user
-set YOK_DIR=%s
-set PATH_CONTAINS_YOK=false
-for %%p in ("%%PATH:;=" "%%") do (
-    if "%%~p" == "%s" set PATH_CONTAINS_YOK=true
-)
-
-if "%%PATH_CONTAINS_YOK%%" == "false" (
-    echo Note: The installation directory is not in your PATH.
-    echo You can add it with: setx PATH "%%PATH%%;%s" /M
-    echo.
+rem Add installation directory to PATH if not already present
+echo Checking if installation directory is in PATH...
+setlocal EnableDelayedExpansion
+set INSTALL_DIR=%s
+set PATH_UPDATED=false
+echo %%PATH%% | findstr /C:"!INSTALL_DIR!" >nul 2>&1
+if errorlevel 1 (
+    echo Adding installation directory to PATH...
+    powershell -Command "
+        try {
+            $currentPath = [Environment]::GetEnvironmentVariable('PATH', 'User')
+            $installDir = '%s'
+            if (-not $currentPath.Contains($installDir)) {
+                [Environment]::SetEnvironmentVariable('PATH', $currentPath + ';' + $installDir, 'User')
+                Write-Host 'Installation directory added to PATH.'
+                exit 0
+            } else {
+                Write-Host 'Installation directory already in PATH.'
+                exit 0
+            }
+        } catch {
+            Write-Host ('Error updating PATH: ' + $_.Exception.Message)
+            exit 1
+        }
+    "
+    if errorlevel 0 (
+        set PATH_UPDATED=true
+        echo PATH updated successfully.
+    ) else (
+        echo Failed to update PATH. You may need to add it manually.
+    )
+) else (
+    echo Installation directory is already in PATH.
 )
 
 rem Step 4: Launch the new version (optional)
+echo.
 set LAUNCH_APP=n
 set /p LAUNCH_APP="Would you like to launch Yok CLI now? (y/n): "
 if /i "%%LAUNCH_APP%%" == "y" (
     echo Starting Yok CLI...
     cd /d "%%USERPROFILE%%"
     
-    rem Try with full path first
-    "%s" --version > nul 2>&1
+    if "!PATH_UPDATED!" == "true" (
+        echo Refreshing PATH for this session...
+        set "PATH=%%PATH%%;%s"
+    )
+    
+    rem Try with full path
+    "%s" version
     if errorlevel 1 (
-        echo Warning: Could not launch with full path.
-        echo Trying with command name only...
-        yok --version > nul 2>&1
+        echo Failed to launch with full path. Trying with command name...
+        yok version
         if errorlevel 1 (
-            echo The system cannot find the file. This may be a PATH issue.
+            echo Failed to launch. You might need to open a new command prompt.
             echo You can run the CLI using the full path: %s
-        ) else (
-            echo Launched successfully with command name.
-            start cmd /k yok
         )
-    ) else (
-        echo Launched successfully.
-        start cmd /k "%s" version
     )
 )
 
 echo.
 echo Update completed! You can now use 'yok' to run the updated version.
+if "!PATH_UPDATED!" == "true" (
+    echo NOTE: You may need to restart your command prompt for PATH changes to take effect.
+)
 echo.
 pause
-`, pid, pid, execPath, latest.URL, latest.AssetURL, execPath, execPath, execDir, execDir, execDir, execPath, execPath, execPath, execPath, execPath, execPath, execPath, execPath, execPath, execPath, execPath, execPath, execPath, execPath, execPath, execPath, execPath, execPath, execPath, execPath, execPath, latest.Version, execDir, execDir, execDir, execPath, execPath, execPath)
+`, pid, pid, execPath, latest.URL, latest.AssetURL, execPath, execPath, execPath, execDir, execDir, execDir, execPath, execPath, execPath, execPath, execPath, execPath, execPath, execPath, execPath, execPath, execPath, execPath, execPath, execPath, execPath, execPath, execPath, execPath, execPath, execPath, execPath, execPath, execPath, execPath, execPath, execPath, latest.Version, execDir, execDir, execDir, execPath, execPath)
 
 	// Write the batch file
 	if err := os.WriteFile(updateBatchPath, []byte(batchContent), 0700); err != nil {
