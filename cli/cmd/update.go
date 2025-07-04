@@ -1,13 +1,17 @@
 package cmd
 
 import (
+	"archive/tar"
+	"compress/gzip"
 	"fmt"
+	"io"
 	"net/http"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"runtime"
 	"strings"
+	"time"
 
 	"github.com/AlecAivazis/survey/v2"
 	"github.com/blang/semver"
@@ -17,31 +21,64 @@ import (
 )
 
 // checkForUpdates checks for newer version on GitHub
-func checkForUpdates() (*selfupdate.Release, bool, error) {
+func checkForUpdates() (string, bool, error) {
+	currentVersion := getCurrentVersion()
+
 	// Create and set HTTP client with reasonable timeout
 	httpClient := utils.CreateHTTPClient()
 	http.DefaultClient = httpClient
 
-	latest, found, err := selfupdate.DetectLatest("velgardey/yok")
-	if err != nil {
-		return nil, false, fmt.Errorf("error checking for updates: %w", err)
-	}
+	var latestVersionStr string
+	var hasUpdate bool
+	var err error
 
-	if !found {
-		return nil, false, fmt.Errorf("no release found for velgardey/yok")
-	}
-
-	currentVersion := strings.TrimPrefix(version, "v")
-	v, err := semver.Parse(currentVersion)
-	if err != nil {
-		// Handle dev version
-		if currentVersion == "dev" || currentVersion == "development" {
-			return latest, true, nil // Always update dev versions
+	if runtime.GOOS == "windows" {
+		// Use non-API method for Windows
+		latestVersionStr, err = getLatestVersionNoAPI()
+		if err != nil {
+			return "", false, fmt.Errorf("failed to check for updates: %w", err)
 		}
-		return nil, false, fmt.Errorf("failed to parse current version: %w", err)
+
+		// Parse versions for comparison
+		currentSemver, err := semver.Parse(currentVersion)
+		if err != nil {
+			if currentVersion == "dev" || currentVersion == "development" {
+				hasUpdate = true // Always update dev versions
+			} else {
+				return "", false, fmt.Errorf("failed to parse current version: %w", err)
+			}
+		} else {
+			latestSemver, err := semver.Parse(latestVersionStr)
+			if err != nil {
+				return "", false, fmt.Errorf("failed to parse latest version: %w", err)
+			}
+			hasUpdate = latestSemver.GT(currentSemver)
+		}
+	} else {
+		// Use GitHub API for non-Windows platforms
+		latest, found, err := selfupdate.DetectLatest("velgardey/yok")
+		if err != nil {
+			return "", false, fmt.Errorf("error checking for updates: %w", err)
+		}
+
+		if !found {
+			return "", false, fmt.Errorf("no release found for velgardey/yok")
+		}
+
+		v, err := semver.Parse(currentVersion)
+		if err != nil {
+			// Handle dev version
+			if currentVersion == "dev" || currentVersion == "development" {
+				return latest.Version.String(), true, nil // Always update dev versions
+			}
+			return "", false, fmt.Errorf("failed to parse current version: %w", err)
+		}
+
+		latestVersionStr = latest.Version.String()
+		hasUpdate = latest.Version.GT(v)
 	}
 
-	return latest, latest.Version.GT(v), nil
+	return latestVersionStr, hasUpdate, nil
 }
 
 // getCurrentVersion returns the current version without the 'v' prefix
@@ -197,76 +234,250 @@ func isRunningWithSudo() bool {
 	return false
 }
 
-// runUnixUpdate handles the update process for Unix-based systems (Linux/macOS)
-func runUnixUpdate(execPath string, latest *selfupdate.Release) error {
-	utils.InfoColor.Println("This operation requires elevated privileges.")
-	fmt.Println("You will be prompted for your password.")
+// runUnixUpdate handles the update process for Unix-based systems (Linux/macOS) using atomic rename
+func runUnixUpdate(execPath string, version string) error {
+	// Get target directory
+	targetDir := filepath.Dir(execPath)
 
-	// Check if we can run sudo without a password prompt first
-	sudoTestCmd := exec.Command("sudo", "-n", "true")
-	sudoTestCmd.Stderr = nil
-	sudoNoPasswd := (sudoTestCmd.Run() == nil)
+	// Check if we have write permission to the target directory
+	if !isLocationWritable(targetDir) {
+		utils.InfoColor.Println("This operation requires elevated privileges.")
+		fmt.Println("You will be prompted for your password.")
 
-	// Get the absolute path to the current binary
-	execPath, err := filepath.Abs(execPath)
+		// Create a command to call the CLI with sudo
+		forceFlag := ""
+		// Check if we were called with --force
+		for _, arg := range os.Args {
+			if arg == "--force" || arg == "-f" {
+				forceFlag = " --force"
+				break
+			}
+		}
+
+		sudoCmd := fmt.Sprintf("sudo yok self-update%s --sudo-mode", forceFlag)
+		fmt.Printf("Running: %s\n", sudoCmd)
+
+		// Execute the command
+		cmd := exec.Command("sudo", "yok", "self-update", "--sudo-mode")
+		if forceFlag != "" {
+			cmd.Args = append(cmd.Args, "--force")
+		}
+
+		cmd.Stdin = os.Stdin
+		cmd.Stdout = os.Stdout
+		cmd.Stderr = os.Stderr
+		return cmd.Run()
+	}
+
+	// Determine archive name based on platform and architecture
+	osName := runtime.GOOS
+	arch := runtime.GOARCH
+
+	// Format archive name: yok_VERSION_OS_ARCH.tar.gz
+	archiveName := fmt.Sprintf("yok_%s_%s_%s.tar.gz", version, osName, arch)
+
+	// Format download URL
+	downloadURL := fmt.Sprintf("https://github.com/velgardey/yok/releases/download/v%s/%s", version, archiveName)
+
+	return performAtomicUpdate(execPath, downloadURL, version)
+}
+
+// performAtomicUpdate downloads and installs the update using atomic rename
+func performAtomicUpdate(currentExe string, downloadURL string, version string) error {
+	// Create temp directory for update
+	tmpDir, err := os.MkdirTemp("", "yok-update-*")
 	if err != nil {
-		return fmt.Errorf("failed to get absolute path: %v", err)
+		return fmt.Errorf("failed to create temporary directory: %w", err)
+	}
+	defer os.RemoveAll(tmpDir)
+
+	// Download archive
+	archivePath := filepath.Join(tmpDir, "update.tar.gz")
+	utils.InfoColor.Printf("Downloading update from %s...\n", downloadURL)
+	if err := downloadFile(downloadURL, archivePath); err != nil {
+		return fmt.Errorf("failed to download update: %w", err)
 	}
 
-	// Create a temporary script for the update
-	tmpDir := os.TempDir()
-	scriptPath := filepath.Join(tmpDir, "yok_update.sh")
-
-	// Write the update script
-	script := fmt.Sprintf(`#!/bin/bash
-set -e
-
-echo "Downloading update from %s..."
-curl -L -o "%s.new" "%s"
-chmod +x "%s.new"
-
-echo "Installing update..."
-mv "%s.new" "%s"
-
-echo "[OK] Yok CLI has been updated to %s successfully!"
-echo "Run 'yok version' to verify the update."
-`, latest.URL, execPath, latest.AssetURL, execPath, execPath, execPath, latest.Version)
-
-	if err := os.WriteFile(scriptPath, []byte(script), 0700); err != nil {
-		return fmt.Errorf("failed to create update script: %v", err)
-	}
-	defer os.Remove(scriptPath)
-
-	// If sudo requires password, inform the user they need to use sudo directly
-	if !sudoNoPasswd {
-		utils.InfoColor.Println("Your system requires a password for sudo operations.")
-		utils.InfoColor.Println("Please run the following command to update:")
-		fmt.Printf("\n    sudo yok self-update --force\n\n")
-		return fmt.Errorf("please run the update with sudo")
+	// Extract binary from archive
+	utils.InfoColor.Println("Extracting update...")
+	extractedBinaryPath, err := extractBinary(archivePath, tmpDir)
+	if err != nil {
+		return fmt.Errorf("failed to extract update: %w", err)
 	}
 
-	// Run the script with sudo
-	cmd := exec.Command("sudo", "bash", scriptPath)
+	// Make binary executable
+	if err = os.Chmod(extractedBinaryPath, 0755); err != nil {
+		return fmt.Errorf("failed to set executable permissions: %w", err)
+	}
+
+	// Get target directory and path
+	targetDir := filepath.Dir(currentExe)
+	targetPath := currentExe
+
+	// Generate unique temp file name in target directory
+	timestamp := fmt.Sprintf("%d", time.Now().UnixNano())
+	tempPath := filepath.Join(targetDir, fmt.Sprintf(".yok.tmp.%s", timestamp))
+
+	// Copy binary to target directory with temp name
+	utils.InfoColor.Println("Installing update...")
+	if err := copyFile(extractedBinaryPath, tempPath); err != nil {
+		return fmt.Errorf("failed to copy update to target directory: %w", err)
+	}
+
+	// Set executable permissions
+	if err = os.Chmod(tempPath, 0755); err != nil {
+		os.Remove(tempPath)
+		return fmt.Errorf("failed to set executable permissions: %w", err)
+	}
+
+	// Perform atomic rename
+	if err = os.Rename(tempPath, targetPath); err != nil {
+		os.Remove(tempPath)
+		return fmt.Errorf("failed to replace binary: %w", err)
+	}
+
+	utils.SuccessColor.Printf("\n[OK] Yok CLI has been updated to v%s successfully!\n", version)
+	fmt.Println("Run 'yok version' to verify the update.")
+
+	return nil
+}
+
+// downloadFile downloads a file from the given URL
+func downloadFile(url string, destPath string) error {
+	client := utils.CreateHTTPClient()
+
+	resp, err := client.Get(url)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		return fmt.Errorf("HTTP request failed with status: %d", resp.StatusCode)
+	}
+
+	out, err := os.Create(destPath)
+	if err != nil {
+		return err
+	}
+	defer out.Close()
+
+	_, err = io.Copy(out, resp.Body)
+	return err
+}
+
+// extractBinary extracts the binary from a tar.gz archive
+func extractBinary(archivePath string, destDir string) (string, error) {
+	file, err := os.Open(archivePath)
+	if err != nil {
+		return "", err
+	}
+	defer file.Close()
+
+	gzReader, err := gzip.NewReader(file)
+	if err != nil {
+		return "", err
+	}
+	defer gzReader.Close()
+
+	tarReader := tar.NewReader(gzReader)
+
+	extractedPath := ""
+	for {
+		header, err := tarReader.Next()
+		if err == io.EOF {
+			break
+		}
+		if err != nil {
+			return "", err
+		}
+
+		// Skip directories
+		if header.FileInfo().IsDir() {
+			continue
+		}
+
+		// Extract only the binary named 'yok'
+		if filepath.Base(header.Name) == "yok" {
+			extractedPath = filepath.Join(destDir, "yok")
+			outFile, err := os.OpenFile(extractedPath, os.O_CREATE|os.O_RDWR, 0755)
+			if err != nil {
+				return "", err
+			}
+			defer outFile.Close()
+
+			if _, err := io.Copy(outFile, tarReader); err != nil {
+				return "", err
+			}
+			break
+		}
+	}
+
+	if extractedPath == "" {
+		return "", fmt.Errorf("binary not found in archive")
+	}
+
+	return extractedPath, nil
+}
+
+// copyFile copies a file from src to dst
+func copyFile(src string, dst string) error {
+	sourceFile, err := os.Open(src)
+	if err != nil {
+		return err
+	}
+	defer sourceFile.Close()
+
+	destFile, err := os.Create(dst)
+	if err != nil {
+		return err
+	}
+	defer destFile.Close()
+
+	if _, err = io.Copy(destFile, sourceFile); err != nil {
+		return err
+	}
+
+	return destFile.Sync()
+}
+
+// runWindowsUpdate handles the update process for Windows
+func runWindowsUpdate(execPath string, version string) error {
+	// Create the PowerShell script
+	scriptPath, err := createWindowsUpdateScript(execPath, version)
+	if err != nil {
+		return err
+	}
+
+	utils.InfoColor.Println("Starting update process...")
+	utils.InfoColor.Println("The CLI will exit and a new process will complete the update.")
+
+	// Launch PowerShell script as a separate process
+	cmd := exec.Command("powershell.exe", "-ExecutionPolicy", "Bypass", "-File", scriptPath)
 	cmd.Stdin = os.Stdin
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
-	return cmd.Run()
+
+	// Start (not Run) to avoid waiting for completion
+	if err := cmd.Start(); err != nil {
+		return fmt.Errorf("failed to start update process: %v", err)
+	}
+
+	// Exit immediately after starting the update process
+	fmt.Println("Update in progress... please wait.")
+	os.Exit(0)
+	return nil // This is never reached
 }
 
 // createWindowsUpdateScript generates a PowerShell script for updating the Windows binary
 func createWindowsUpdateScript(targetPath, version string) (string, error) {
-	// Create a temp file for the update script
 	tmpDir := os.TempDir()
 	scriptPath := filepath.Join(tmpDir, "yok_update.ps1")
-
-	// Format the download URL based on version
 	downloadUrl := fmt.Sprintf("https://github.com/velgardey/yok/releases/download/v%s/yok_%s_windows_amd64.zip",
 		version, version)
-
-	// Create backup path
 	backupPath := targetPath + ".backup"
 
-	// Build the script content without complex formatting
+	// Build the script content
 	scriptContent := []string{
 		"# Yok CLI Self-Update Script",
 		"$ErrorActionPreference = \"Stop\"",
@@ -367,40 +578,41 @@ func createWindowsUpdateScript(targetPath, version string) (string, error) {
 	script := strings.Join(scriptContent, "\n")
 
 	// Write the script to disk
-	err := os.WriteFile(scriptPath, []byte(script), 0700)
-	if err != nil {
-		return "", fmt.Errorf("failed to create update script: %v", err)
-	}
-
-	return scriptPath, nil
+	return scriptPath, os.WriteFile(scriptPath, []byte(script), 0700)
 }
 
-// runWindowsUpdate handles the update process for Windows
-func runWindowsUpdate(execPath string, version string) error {
-	// Create the PowerShell script
-	scriptPath, err := createWindowsUpdateScript(execPath, version)
+// getExePath returns the normalized executable path
+func getExePath() (string, string, error) {
+	// Get executable path
+	execPath, err := os.Executable()
 	if err != nil {
-		return err
+		return "", "", fmt.Errorf("failed to get executable path: %v", err)
 	}
 
-	utils.InfoColor.Println("Starting update process...")
-	utils.InfoColor.Println("The CLI will exit and a new process will complete the update.")
-
-	// Launch PowerShell script as a separate process
-	cmd := exec.Command("powershell.exe", "-ExecutionPolicy", "Bypass", "-File", scriptPath)
-	cmd.Stdin = os.Stdin
-	cmd.Stdout = os.Stdout
-	cmd.Stderr = os.Stderr
-
-	// Start (not Run) to avoid waiting for completion
-	if err := cmd.Start(); err != nil {
-		return fmt.Errorf("failed to start update process: %v", err)
+	// Resolve symlinks to get the actual binary path
+	execPath, err = filepath.EvalSymlinks(execPath)
+	if err != nil {
+		return "", "", fmt.Errorf("failed to resolve symlinks: %v", err)
 	}
 
-	// Exit immediately after starting the update process
-	fmt.Println("Update in progress... please wait.")
-	os.Exit(0)
-	return nil // This is never reached
+	// Handle special executable names (testing builds)
+	execDir := filepath.Dir(execPath)
+	targetName := "yok"
+	if runtime.GOOS == "windows" {
+		targetName += ".exe"
+	}
+
+	// Use standard installation paths for test builds
+	installDir := execDir
+	if strings.HasSuffix(filepath.Base(execPath), ".new") || strings.HasSuffix(filepath.Base(execPath), ".test") {
+		var err error
+		installDir, err = detectInstallLocation()
+		if err != nil {
+			return "", "", fmt.Errorf("failed to detect installation location: %v", err)
+		}
+	}
+
+	return installDir, targetName, nil
 }
 
 // runSelfUpdate implements the update logic
@@ -409,8 +621,7 @@ func runSelfUpdate(cmd *cobra.Command, force bool, checkOnly bool) error {
 	sudoMode := isRunningWithSudo()
 	sudoFlag, _ := cmd.Flags().GetBool("sudo-mode")
 
-	// For Unix systems, if we're not running with sudo and don't have the sudo flag set,
-	// check if we need sudo by trying to write to the binary location
+	// For Unix systems, check if we need sudo
 	if (runtime.GOOS == "linux" || runtime.GOOS == "darwin") && !sudoMode && !sudoFlag {
 		execPath, err := os.Executable()
 		if err == nil {
@@ -427,53 +638,16 @@ func runSelfUpdate(cmd *cobra.Command, force bool, checkOnly bool) error {
 		}
 	}
 
-	// For Windows, we'll use a different approach without requiring the GitHub API
-	var currentVersion, latestVersionStr string
-	var hasUpdate bool
-	var latest *selfupdate.Release
-	var err error
-
-	currentVersion = getCurrentVersion()
-
 	// Check for updates
 	spinner := utils.StartSpinner("Checking for updates...")
+	latestVersionStr, hasUpdate, err := checkForUpdates()
+	utils.StopSpinner(spinner)
 
-	if runtime.GOOS == "windows" {
-		// Use non-API method for Windows
-		latestVersionStr, err = getLatestVersionNoAPI()
-		if err != nil {
-			utils.StopSpinner(spinner)
-			return fmt.Errorf("failed to check for updates: %w", err)
-		}
-
-		// Parse versions for comparison
-		currentSemver, err := semver.Parse(currentVersion)
-		if err != nil {
-			if currentVersion == "dev" || currentVersion == "development" {
-				hasUpdate = true // Always update dev versions
-			} else {
-				utils.StopSpinner(spinner)
-				return fmt.Errorf("failed to parse current version: %w", err)
-			}
-		} else {
-			latestSemver, err := semver.Parse(latestVersionStr)
-			if err != nil {
-				utils.StopSpinner(spinner)
-				return fmt.Errorf("failed to parse latest version: %w", err)
-			}
-			hasUpdate = latestSemver.GT(currentSemver)
-		}
-	} else {
-		// Use the existing API-based method for non-Windows
-		latest, hasUpdate, err = checkForUpdates()
-		if err != nil {
-			utils.StopSpinner(spinner)
-			return fmt.Errorf("failed to check for updates: %w", err)
-		}
-		latestVersionStr = latest.Version.String()
+	if err != nil {
+		return fmt.Errorf("failed to check for updates: %w", err)
 	}
 
-	utils.StopSpinner(spinner)
+	currentVersion := getCurrentVersion()
 
 	// Just checking for updates
 	if checkOnly {
@@ -496,13 +670,7 @@ func runSelfUpdate(cmd *cobra.Command, force bool, checkOnly bool) error {
 	utils.InfoColor.Printf("\nAvailable update:\n")
 	fmt.Printf("Current version: v%s\n", currentVersion)
 	fmt.Printf("Latest version: v%s\n", latestVersionStr)
-
-	// Show release page URL based on platform
-	if runtime.GOOS == "windows" {
-		fmt.Printf("Release page: https://github.com/velgardey/yok/releases/tag/v%s\n", latestVersionStr)
-	} else if latest != nil {
-		fmt.Printf("Release page: %s\n", latest.URL)
-	}
+	fmt.Printf("Release page: https://github.com/velgardey/yok/releases/tag/v%s\n", latestVersionStr)
 
 	// Confirm update unless forced
 	if !force {
@@ -522,33 +690,10 @@ func runSelfUpdate(cmd *cobra.Command, force bool, checkOnly bool) error {
 		}
 	}
 
-	// Get executable path
-	execPath, err := os.Executable()
+	// Get install path
+	installDir, targetName, err := getExePath()
 	if err != nil {
-		return fmt.Errorf("failed to get executable path: %v", err)
-	}
-
-	// Resolve symlinks to get the actual binary path
-	execPath, err = filepath.EvalSymlinks(execPath)
-	if err != nil {
-		return fmt.Errorf("failed to resolve symlinks: %v", err)
-	}
-
-	// Handle special executable names (testing builds)
-	execDir := filepath.Dir(execPath)
-	targetName := "yok"
-	if runtime.GOOS == "windows" {
-		targetName += ".exe"
-	}
-
-	// Use standard installation paths for test builds
-	installDir := execDir
-	if strings.HasSuffix(filepath.Base(execPath), ".new") || strings.HasSuffix(filepath.Base(execPath), ".test") {
-		var err error
-		installDir, err = detectInstallLocation()
-		if err != nil {
-			return fmt.Errorf("failed to detect installation location: %v", err)
-		}
+		return err
 	}
 
 	targetPath := filepath.Join(installDir, targetName)
@@ -556,11 +701,9 @@ func runSelfUpdate(cmd *cobra.Command, force bool, checkOnly bool) error {
 	// Handle platform-specific update
 	if runtime.GOOS == "windows" {
 		return runWindowsUpdate(targetPath, latestVersionStr)
-	} else if latest != nil {
-		return runUnixUpdate(targetPath, latest)
+	} else {
+		return runUnixUpdate(targetPath, latestVersionStr)
 	}
-
-	return fmt.Errorf("update not implemented for this platform")
 }
 
 // Set up the update command
