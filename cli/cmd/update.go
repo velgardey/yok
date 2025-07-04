@@ -11,7 +11,6 @@ import (
 	"path/filepath"
 	"runtime"
 	"strings"
-	"time"
 
 	"github.com/AlecAivazis/survey/v2"
 	"github.com/blang/semver"
@@ -212,63 +211,8 @@ func isLocationWritable(dir string) bool {
 	return true
 }
 
-// hasWritePermission checks if the binary can be updated without elevation
-func hasWritePermission(execPath string) bool {
-	file, err := os.OpenFile(execPath, os.O_WRONLY, 0)
-	if err == nil {
-		file.Close()
-		return true
-	}
-	return false
-}
-
-// isRunningWithSudo checks if process has elevated privileges
-func isRunningWithSudo() bool {
-	if runtime.GOOS != "windows" {
-		cmd := exec.Command("id", "-u")
-		output, err := cmd.Output()
-		if err == nil && strings.TrimSpace(string(output)) == "0" {
-			return true
-		}
-	}
-	return false
-}
-
 // runUnixUpdate handles the update process for Unix-based systems (Linux/macOS) using atomic rename
 func runUnixUpdate(execPath string, version string) error {
-	// Get target directory
-	targetDir := filepath.Dir(execPath)
-
-	// Check if we have write permission to the target directory
-	if !isLocationWritable(targetDir) {
-		utils.InfoColor.Println("This operation requires elevated privileges.")
-		fmt.Println("You will be prompted for your password.")
-
-		// Create a command to call the CLI with sudo
-		forceFlag := ""
-		// Check if we were called with --force
-		for _, arg := range os.Args {
-			if arg == "--force" || arg == "-f" {
-				forceFlag = " --force"
-				break
-			}
-		}
-
-		sudoCmd := fmt.Sprintf("sudo yok self-update%s --sudo-mode", forceFlag)
-		fmt.Printf("Running: %s\n", sudoCmd)
-
-		// Execute the command
-		cmd := exec.Command("sudo", "yok", "self-update", "--sudo-mode")
-		if forceFlag != "" {
-			cmd.Args = append(cmd.Args, "--force")
-		}
-
-		cmd.Stdin = os.Stdin
-		cmd.Stdout = os.Stdout
-		cmd.Stderr = os.Stderr
-		return cmd.Run()
-	}
-
 	// Determine archive name based on platform and architecture
 	osName := runtime.GOOS
 	arch := runtime.GOARCH
@@ -279,11 +223,6 @@ func runUnixUpdate(execPath string, version string) error {
 	// Format download URL
 	downloadURL := fmt.Sprintf("https://github.com/velgardey/yok/releases/download/v%s/%s", version, archiveName)
 
-	return performAtomicUpdate(execPath, downloadURL, version)
-}
-
-// performAtomicUpdate downloads and installs the update using atomic rename
-func performAtomicUpdate(currentExe string, downloadURL string, version string) error {
 	// Create temp directory for update
 	tmpDir, err := os.MkdirTemp("", "yok-update-*")
 	if err != nil {
@@ -310,35 +249,35 @@ func performAtomicUpdate(currentExe string, downloadURL string, version string) 
 		return fmt.Errorf("failed to set executable permissions: %w", err)
 	}
 
-	// Get target directory and path
-	targetDir := filepath.Dir(currentExe)
-	targetPath := currentExe
+	// Get target path
+	targetPath := execPath
 
-	// Generate unique temp file name in target directory
-	timestamp := fmt.Sprintf("%d", time.Now().UnixNano())
-	tempPath := filepath.Join(targetDir, fmt.Sprintf(".yok.tmp.%s", timestamp))
+	utils.InfoColor.Println("This operation requires elevated privileges.")
+	fmt.Println("You will be prompted for your password.")
 
-	// Copy binary to target directory with temp name
+	// Use sudo to copy the file to the target location
 	utils.InfoColor.Println("Installing update...")
-	if err := copyFile(extractedBinaryPath, tempPath); err != nil {
-		return fmt.Errorf("failed to copy update to target directory: %w", err)
+	sudoCmd := exec.Command("sudo", "cp", extractedBinaryPath, targetPath)
+	sudoCmd.Stdin = os.Stdin
+	sudoCmd.Stdout = os.Stdout
+	sudoCmd.Stderr = os.Stderr
+
+	if err := sudoCmd.Run(); err != nil {
+		return fmt.Errorf("failed to copy update with sudo: %w", err)
 	}
 
-	// Set executable permissions
-	if err = os.Chmod(tempPath, 0755); err != nil {
-		os.Remove(tempPath)
-		return fmt.Errorf("failed to set executable permissions: %w", err)
-	}
+	// Set permissions with sudo
+	chmodCmd := exec.Command("sudo", "chmod", "755", targetPath)
+	chmodCmd.Stdin = os.Stdin
+	chmodCmd.Stdout = os.Stdout
+	chmodCmd.Stderr = os.Stderr
 
-	// Perform atomic rename
-	if err = os.Rename(tempPath, targetPath); err != nil {
-		os.Remove(tempPath)
-		return fmt.Errorf("failed to replace binary: %w", err)
+	if err := chmodCmd.Run(); err != nil {
+		return fmt.Errorf("failed to set permissions with sudo: %w", err)
 	}
 
 	utils.SuccessColor.Printf("\n[OK] Yok CLI has been updated to v%s successfully!\n", version)
 	fmt.Println("Run 'yok version' to verify the update.")
-
 	return nil
 }
 
@@ -418,27 +357,6 @@ func extractBinary(archivePath string, destDir string) (string, error) {
 	}
 
 	return extractedPath, nil
-}
-
-// copyFile copies a file from src to dst
-func copyFile(src string, dst string) error {
-	sourceFile, err := os.Open(src)
-	if err != nil {
-		return err
-	}
-	defer sourceFile.Close()
-
-	destFile, err := os.Create(dst)
-	if err != nil {
-		return err
-	}
-	defer destFile.Close()
-
-	if _, err = io.Copy(destFile, sourceFile); err != nil {
-		return err
-	}
-
-	return destFile.Sync()
 }
 
 // runWindowsUpdate handles the update process for Windows
@@ -616,28 +534,7 @@ func getExePath() (string, string, error) {
 }
 
 // runSelfUpdate implements the update logic
-func runSelfUpdate(cmd *cobra.Command, force bool, checkOnly bool) error {
-	// Check for sudo/admin mode
-	sudoMode := isRunningWithSudo()
-	sudoFlag, _ := cmd.Flags().GetBool("sudo-mode")
-
-	// For Unix systems, check if we need sudo
-	if (runtime.GOOS == "linux" || runtime.GOOS == "darwin") && !sudoMode && !sudoFlag {
-		execPath, err := os.Executable()
-		if err == nil {
-			execPath, err = filepath.EvalSymlinks(execPath)
-			if err == nil && !hasWritePermission(execPath) {
-				utils.InfoColor.Println("This operation requires elevated privileges.")
-				forceFlag := ""
-				if force {
-					forceFlag = " --force"
-				}
-				fmt.Println("Please run: sudo yok self-update" + forceFlag)
-				return fmt.Errorf("please run with sudo")
-			}
-		}
-	}
-
+func runSelfUpdate(_ *cobra.Command, force bool, checkOnly bool) error {
 	// Check for updates
 	spinner := utils.StartSpinner("Checking for updates...")
 	latestVersionStr, hasUpdate, err := checkForUpdates()
@@ -713,7 +610,6 @@ func init() {
 	var (
 		force     bool
 		checkOnly bool
-		sudoMode  bool
 	)
 
 	updateCmd = &cobra.Command{
@@ -746,8 +642,6 @@ func init() {
 
 	updateCmd.Flags().BoolVarP(&force, "force", "f", false, "Force update without confirmation")
 	updateCmd.Flags().BoolVarP(&checkOnly, "check", "c", false, "Only check for updates without installing")
-	updateCmd.Flags().BoolVar(&sudoMode, "sudo-mode", false, "Internal flag to prevent sudo loop")
-	updateCmd.Flags().MarkHidden("sudo-mode")
 
 	RootCmd.AddCommand(updateCmd)
 }
