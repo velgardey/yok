@@ -47,10 +47,12 @@ type ProjectCheckResponse struct {
 
 // Deployment represents a deployment entity
 type Deployment struct {
-	ID        string    `json:"id"`
-	Status    string    `json:"status"`
-	CreatedAt time.Time `json:"createdAt"`
-	UpdatedAt time.Time `json:"updatedAt"`
+	ID            string     `json:"id"`
+	Status        string     `json:"status"`
+	CreatedAt     time.Time  `json:"createdAt"`
+	UpdatedAt     time.Time  `json:"updatedAt"`
+	CompletedAt   *time.Time `json:"completedAt,omitempty"`
+	DeploymentUrl string     `json:"deploymentUrl,omitempty"`
 }
 
 // DeploymentListResponse wraps a deployment list response
@@ -74,4 +76,20 @@ type GitHubRelease struct {
 	TagName    string `json:"tag_name"`
 	Name       string `json:"name"`
 	Prerelease bool   `json:"prerelease"`
+}
+
+// LogEntry represents a single log entry
+type LogEntry struct {
+	EventID      string `json:"event_id"`
+	DeploymentID string `json:"deployment_id"`
+	Log          string `json:"log"`
+	Timestamp    string `json:"timestamp"`
+}
+
+// LogsResponse represents the response from the logs API
+type LogsResponse struct {
+	Status string `json:"status"`
+	Data   struct {
+		Logs []LogEntry `json:"logs"`
+	} `json:"data"`
 }

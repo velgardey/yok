@@ -22,6 +22,14 @@ import (
 // HTTP client with reasonable timeout
 var httpClient = utils.CreateHTTPClient()
 
+// Default log renderer
+var defaultLogRenderer *utils.LogRenderer
+
+// SetLogRenderer sets the log renderer to use for streaming logs
+func SetLogRenderer(renderer *utils.LogRenderer) {
+	defaultLogRenderer = renderer
+}
+
 // FindProjectByName checks if a project with the given name already exists
 func FindProjectByName(name string) (*types.Project, error) {
 	escapedName := url.QueryEscape(name)
@@ -301,27 +309,32 @@ func FollowDeploymentStatus(deploymentID string, deploymentURL string, projectID
 			break
 		}
 
-		if status.Status == "COMPLETED" {
+		switch status.Status {
+		case "COMPLETED":
 			utils.StopSpinner(s)
 			utils.SuccessColor.Printf("\n[OK] Deployment completed successfully!\n")
-
-			// Try to get the project slug for a nicer URL
-			project, err := GetProject(projectID)
-			if err == nil && project.Slug != "" {
-				utils.InfoColor.Printf("[i] Your site is available at:\n")
-				fmt.Printf("- https://%s.yok.ninja\n", project.Slug)
-				fmt.Printf("- %s\n", deploymentURL)
-			} else {
-				// If we couldn't get the project or it doesn't have a slug, just show the deployment URL
-				utils.InfoColor.Printf("[i] Your site is now available at: %s\n", deploymentURL)
-			}
-			break
-		} else if status.Status == "FAILED" {
+			showDeploymentURLs(projectID, deploymentURL)
+			return
+		case "FAILED":
 			utils.StopSpinner(s)
 			utils.ErrorColor.Printf("\n[X] Deployment failed\n")
-			break
+			return
 		}
 		// Continue waiting for other status values
+	}
+}
+
+// showDeploymentURLs displays the URLs for a project (used by FollowDeploymentStatus)
+func showDeploymentURLs(projectID string, deploymentURL string) {
+	project, err := GetProject(projectID)
+	if err == nil && project.Slug != "" {
+		utils.InfoColor.Printf("[i] Your site is available at:\n")
+		fmt.Printf("- https://%s.yok.ninja\n", project.Slug)
+		if deploymentURL != "" {
+			fmt.Printf("- %s\n", deploymentURL)
+		}
+	} else if deploymentURL != "" {
+		utils.InfoColor.Printf("[i] Your site is now available at: %s\n", deploymentURL)
 	}
 }
 
@@ -548,4 +561,130 @@ func PromptForProjectCreationDetails() (string, string, string, *types.Project, 
 	framework := DetectFramework()
 
 	return projectName, repoURL, framework, nil, false, nil
+}
+
+// GetDeploymentLogs fetches logs for a specific deployment
+func GetDeploymentLogs(deploymentID string, lastEventID string) (*types.LogsResponse, error) {
+	url := fmt.Sprintf("%s/logs/%s", utils.ApiURL, deploymentID)
+
+	// Add lastEventID as query parameter if it exists
+	if lastEventID != "" {
+		url = fmt.Sprintf("%s?lastEventID=%s", url, lastEventID)
+	}
+
+	resp, err := httpClient.Get(url)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get deployment logs: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(resp.Body)
+		return nil, fmt.Errorf("API returned status code %d: %s", resp.StatusCode, string(body))
+	}
+
+	var logsResp types.LogsResponse
+	if err := utils.DecodeJSON(resp.Body, &logsResp); err != nil {
+		return nil, fmt.Errorf("failed to decode logs response: %w", err)
+	}
+
+	return &logsResp, nil
+}
+
+// StreamDeploymentLogs continuously fetches and displays logs for a deployment
+// It polls until the deployment is complete or stopChan receives a value
+func StreamDeploymentLogs(deploymentID string, stopChan chan bool) bool {
+	var lastEventID string
+	var lastErrorMessage string
+
+	// Use the configured renderer or create a new default one
+	logRenderer := defaultLogRenderer
+	if logRenderer == nil {
+		logRenderer = utils.NewLogRenderer()
+	}
+
+	// Keep track of logs we've already seen to avoid duplicates
+	seenLogs := make(map[string]bool)
+
+	// First fetch to get initial logs
+	logs, err := GetDeploymentLogs(deploymentID, "")
+	if err != nil {
+		utils.ErrorColor.Printf("Error fetching logs: %v\n", err)
+		return false
+	}
+
+	// Display initial logs
+	for _, logEntry := range logs.Data.Logs {
+		seenLogs[logEntry.EventID] = true
+		logRenderer.RenderLogEntry(logEntry)
+		lastEventID = logEntry.EventID
+
+		// Keep track of the last error message
+		if strings.Contains(logEntry.Log, "Error:") || strings.Contains(logEntry.Log, "Failed:") {
+			lastErrorMessage = logEntry.Log
+		}
+
+		// Check for completion marker
+		if strings.Contains(logEntry.Log, "Build output uploaded to S3 successfully") {
+			utils.InfoColor.Println("\nDeployment completed successfully!")
+			return true
+		}
+	}
+
+	// Start polling for new logs
+	ticker := time.NewTicker(1 * time.Second)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-ticker.C:
+			// Fetch new logs since the last event ID
+			newLogs, err := GetDeploymentLogs(deploymentID, lastEventID)
+			if err != nil {
+				utils.ErrorColor.Printf("Error fetching logs: %v\n", err)
+				continue
+			}
+
+			// Process new logs
+			for _, logEntry := range newLogs.Data.Logs {
+				if seenLogs[logEntry.EventID] {
+					continue
+				}
+
+				seenLogs[logEntry.EventID] = true
+				logRenderer.RenderLogEntry(logEntry)
+				lastEventID = logEntry.EventID
+
+				if strings.Contains(logEntry.Log, "Error:") || strings.Contains(logEntry.Log, "Failed:") {
+					lastErrorMessage = logEntry.Log
+				}
+
+				// Check for completion marker
+				if strings.Contains(logEntry.Log, "Build output uploaded to S3 successfully") {
+					utils.InfoColor.Println("\nDeployment completed successfully!")
+					return true
+				}
+			}
+
+			// Check deployment status to catch completion/failure without log entry
+			deployment, err := GetDeploymentStatus(deploymentID)
+			if err == nil {
+				switch deployment.Status {
+				case "COMPLETED":
+					// Let's check once more for the final log in case it just came in
+					ticker.Reset(3 * time.Second)
+				case "FAILED":
+					utils.ErrorColor.Println("\nDeployment failed.")
+					if lastErrorMessage != "" {
+						utils.ErrorColor.Printf("Last error: %s\n", lastErrorMessage)
+					}
+					return false
+				}
+			}
+
+		case <-stopChan:
+			// User interrupted
+			return false
+		}
+	}
 }

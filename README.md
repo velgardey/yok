@@ -104,7 +104,7 @@ yok reset-config
 Deploys your project to the web using Yok.
 
 ```bash
-yok deploy
+yok deploy [flags]
 ```
 
 - Checks if your local branch is in sync with the remote
@@ -112,18 +112,25 @@ yok deploy
 - Deploys the project and shows real-time deployment status
 - Provides the URL where your site is available once deployment completes
 
+Options:
+- `-l, --logs`: Follow deployment logs in real-time
+- `-n, --no-sync-check`: Skip repository sync check
+
 #### `yok ship`
 
 Commits, pushes, and deploys your project in one command.
 
 ```bash
-yok ship
+yok ship [flags]
 ```
 
 - Prompts for a commit message
 - Adds all changes, commits them, and pushes to the remote
 - Deploys the project and shows real-time deployment status
 - Provides the URL where your site is available once deployment completes
+
+Options:
+- `-l, --logs`: Follow deployment logs in real-time
 
 ### Deployment Management
 
@@ -139,6 +146,29 @@ yok status abc123def
 
 - If no deployment ID is provided, you'll be prompted to select from recent deployments
 - Shows detailed status information including creation time and last update
+- Add the `-l` or `--logs` flag to also view the deployment logs
+
+#### `yok logs [deploymentId]`
+
+View and follow logs for a deployment.
+
+```bash
+yok logs
+# OR
+yok logs abc123def
+```
+
+- If no deployment ID is provided, you'll be prompted to select from recent deployments
+- Shows real-time logs as they are generated
+- Automatically exits when the deployment completes
+- Press Ctrl+C to stop following logs at any time
+
+Options:
+- `-f, --follow`: Follow logs as they are generated (default: true)
+- `-t, --no-timestamps`: Hide timestamps in log output
+- `-c, --no-color`: Disable colored output
+- `-r, --raw`: Display raw log output without formatting
+- `-w, --wait`: Wait for completion and exit automatically when logs are complete (default: true)
 
 #### `yok list`
 

@@ -190,7 +190,7 @@ app.post('/deploy', async (req: Request, res: Response) => {
             status: 'success',
             data: {
                 deploymentId: deployment.id,
-                deploymentUrl: `http://${deployment.id}.yok.ninja/`
+                deploymentUrl: `https://${deployment.id}.yok.ninja/`
             }
         });
     } catch (error) {
