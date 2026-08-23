@@ -10,9 +10,10 @@ COPY package.json ./
 
 RUN pnpm install
 
-COPY main.sh script.js ./
+COPY main.sh ./
+COPY src ./src
 COPY ca.pem ./
 
-RUN chmod +x main.sh script.js
+RUN chmod +x main.sh
 
 ENTRYPOINT ["/bin/bash", "main.sh"]
