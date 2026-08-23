@@ -48,4 +48,4 @@ logs/
 Thumbs.db
 
 # Test Repo Folder
-chess-rogue/
+chess-rogue/.worktrees/
