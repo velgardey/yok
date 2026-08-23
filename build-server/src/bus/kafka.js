@@ -63,4 +63,4 @@ class Publisher {
   }
 }
 
-module.exports = { Publisher, createProducerFromEnv, logMessage, statusMessage, VALID_STATUSES };
+module.exports = { Publisher, createProducerFromEnv, logMessage, statusMessage };

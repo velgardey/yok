@@ -1,10 +1,17 @@
 import { createClient } from '@clickhouse/client';
 import { loadConfig } from './config';
-import { createKafka, startLogConsumer } from './bus/kafka';
+import { createKafka, startLogConsumer, type LogMessage } from './bus/kafka';
 import { LogStore } from './logs/clickhouse';
 import { applyStatus, markFailed } from './services/deploymentService';
-import { insertLogSafe } from './logs/store-helpers';
 import { createApp } from './app';
+
+async function insertLogSafe(logStore: LogStore, m: LogMessage): Promise<void> {
+  try {
+    await logStore.insertLog(m.deploymentId, m.log);
+  } catch (err) {
+    console.error('Failed to persist log:', err);
+  }
+}
 
 async function main(): Promise<void> {
   const config = loadConfig();

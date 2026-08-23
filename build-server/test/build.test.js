@@ -1,6 +1,6 @@
 const test = require('node:test');
 const assert = require('node:assert');
-const { getBuildCommand, KNOWN_OUTPUT_DIRS } = require('../src/build');
+const { getBuildCommand } = require('../src/build');
 
 test('NEXT gets export step', () => {
   assert.match(getBuildCommand('NEXT'), /next export/);

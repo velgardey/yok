@@ -38,8 +38,6 @@ function findProjectOwned(projectId: string, userId: string) {
   return prisma.project.findFirst({ where: { id: projectId, userId } });
 }
 
-export { ACTIVE_STATUSES };
-
 export async function cancelDeployment(deploymentId: string, userId: string) {
   const found = await ownedDeploymentOrError(deploymentId, userId);
   if ('error' in found) return found;

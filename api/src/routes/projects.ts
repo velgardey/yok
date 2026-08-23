@@ -8,8 +8,6 @@ const frameworkSchema = z.enum(['NEXT', 'REACT', 'VUE', 'ANGULAR', 'SVELTE', 'OT
 
 export const projectsRouter: Router = Router();
 
-projectsRouter.use(['/project', '/deploy', '/deployment', '/logs'], requireAuth);
-
 projectsRouter.post('/project', async (req, res) => {
   const parsed = z
     .object({ name: z.string().min(1), gitRepoUrl: z.url(), framework: frameworkSchema })
