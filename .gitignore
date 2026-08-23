@@ -40,7 +40,7 @@ terraform/yok-key.pem
 docker-compose.override.yml
 
 # Logs
-logs/
+/logs/
 *.log
 
 # OS specific
