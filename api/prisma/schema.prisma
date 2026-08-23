@@ -36,9 +36,32 @@ model Project {
   customDomain       String?      @map("custom_domain")
   latestDeploymentId String?      @map("latest_deployment_id")
   framework          Framework    @default(OTHER) @map("framework")
+  owner              User?        @relation(fields: [userId], references: [id])
+  userId             String?      @map("user_id")
   Deployments        Deployment[]
   createdAt          DateTime     @default(now()) @map("created_at")
   updatedAt          DateTime     @updatedAt @map("updated_at")
+}
+
+model User {
+  id        String   @id @default(uuid())
+  email     String   @unique
+  createdAt DateTime @default(now()) @map("created_at")
+  tokens    Token[]
+  projects  Project[]
+}
+
+model Token {
+  id         String    @id @default(uuid())
+  user       User      @relation(fields: [userId], references: [id])
+  userId     String    @map("user_id")
+  name       String
+  prefix     String    @unique
+  hash       String    @unique
+  lastUsedAt DateTime? @map("last_used_at")
+  expiresAt  DateTime  @map("expires_at")
+  revokedAt  DateTime? @map("revoked_at")
+  createdAt  DateTime  @default(now()) @map("created_at")
 }
 
 model Deployment {
