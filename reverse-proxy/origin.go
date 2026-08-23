@@ -37,10 +37,11 @@ func (s *s3OriginResolver) Resolve(deploymentID string) (*url.URL, error) {
 	return &u, nil
 }
 
-var proxyCache sync.Map // origin host -> *httputil.ReverseProxy
+var proxyCache sync.Map // full origin identity -> *httputil.ReverseProxy
 
 func proxyFor(target *url.URL) *httputil.ReverseProxy {
-	if cached, ok := proxyCache.Load(target.Host); ok {
+	key := target.Scheme + "://" + target.Host + target.Path
+	if cached, ok := proxyCache.Load(key); ok {
 		return cached.(*httputil.ReverseProxy)
 	}
 	proxy := httputil.NewSingleHostReverseProxy(target)
@@ -50,6 +51,6 @@ func proxyFor(target *url.URL) *httputil.ReverseProxy {
 		req.Host = target.Host
 		req.Header.Set("Host", target.Host)
 	}
-	actual, _ := proxyCache.LoadOrStore(target.Host, proxy)
+	actual, _ := proxyCache.LoadOrStore(key, proxy)
 	return actual.(*httputil.ReverseProxy)
 }

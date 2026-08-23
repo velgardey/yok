@@ -2,6 +2,7 @@ package main
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log"
@@ -14,6 +15,8 @@ import (
 	"github.com/joho/godotenv"
 )
 
+var errResolveRequest = errors.New("invalid resolve request")
+
 type SubDomainResponse struct {
 	DeploymentId string `json:"deploymentId"`
 }
@@ -24,6 +27,7 @@ type serveDeps struct {
 	apiServerURL string
 	proxyToken   string
 	slugPattern  *regexp.Regexp
+	pathPattern  *regexp.Regexp
 	assetDirs    map[string]bool
 }
 
@@ -49,6 +53,7 @@ func main() {
 		apiServerURL: apiServerURL,
 		proxyToken:   proxyToken,
 		slugPattern:  regexp.MustCompile(`^[a-z]+-[a-z]+-[a-z]+$`),
+		pathPattern:  regexp.MustCompile(`^/([^/]+)/(.*)$`),
 		assetDirs: map[string]bool{
 			"assets": true,
 			"images": true,
@@ -75,6 +80,11 @@ func serve(w http.ResponseWriter, r *http.Request, d serveDeps) {
 	if d.slugPattern.MatchString(subDomain) {
 		id, err := resolveDeploymentID(d.client, d.apiServerURL, d.proxyToken, subDomain)
 		if err != nil {
+			if errors.Is(err, errResolveRequest) {
+				log.Printf("Error building resolve request: %v", err)
+				http.Error(w, "Failed to resolve deployment", http.StatusBadGateway)
+				return
+			}
 			log.Printf("Error resolving deployment ID: %v", err)
 			http.Error(w, "Failed to receive deployment Id", http.StatusInternalServerError)
 			return
@@ -96,8 +106,7 @@ func serve(w http.ResponseWriter, r *http.Request, d serveDeps) {
 		urlPath = r.URL.Path
 	}
 
-	pathRegex := regexp.MustCompile(`^/([^/]+)/(.*)$`)
-	pathMatch := pathRegex.FindStringSubmatch(urlPath)
+	pathMatch := d.pathPattern.FindStringSubmatch(urlPath)
 	if pathMatch != nil && !d.assetDirs[pathMatch[1]] {
 		r.URL.Path = "/" + pathMatch[2]
 		log.Printf("Rewriting path from %s to %s", urlPath, r.URL.Path)
@@ -107,7 +116,10 @@ func serve(w http.ResponseWriter, r *http.Request, d serveDeps) {
 }
 
 func resolveDeploymentID(client *http.Client, apiServerURL, proxyToken, slug string) (string, error) {
-	req, _ := http.NewRequest(http.MethodGet, fmt.Sprintf("%s/resolve/%s", apiServerURL, slug), nil)
+	req, err := http.NewRequest(http.MethodGet, fmt.Sprintf("%s/resolve/%s", apiServerURL, slug), nil)
+	if err != nil {
+		return "", fmt.Errorf("%w: %w", errResolveRequest, err)
+	}
 	req.Header.Set("Authorization", "Bearer "+proxyToken)
 	resp, err := client.Do(req)
 	if err != nil {
