@@ -35,7 +35,7 @@ var loginCmd = &cobra.Command{
 
 		req, err := http.NewRequest(http.MethodGet, strings.TrimRight(cfg.APIURL, "/")+"/auth/me", nil)
 		utils.HandleError(err, "Failed to build validation request")
-		utils.WithAuth(req)
+		req.Header.Set("Authorization", "Bearer "+token)
 
 		resp, err := utils.CreateHTTPClient().Do(req)
 		utils.HandleError(err, "Failed to reach API")
@@ -48,7 +48,7 @@ var loginCmd = &cobra.Command{
 		}
 
 		utils.HandleError(config.SaveConfig(cfg), "Failed to save config")
-		fmt.Println("[OK] Logged in.")
+		utils.SuccessColor.Println("[OK] Logged in.")
 	},
 }
 

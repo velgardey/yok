@@ -9,6 +9,8 @@ import (
 
 func TestSaveLoadRoundTrip(t *testing.T) {
 	dir := t.TempDir()
+	prev := configFile
+	t.Cleanup(func() { configFile = prev })
 	configFile = filepath.Join(dir, "cfg.json")
 
 	in := types.Config{ProjectID: "p1", APIURL: "https://api.example.dev", Token: "yok_abc", SiteDomain: "dev.example"}
@@ -25,6 +27,8 @@ func TestSaveLoadRoundTrip(t *testing.T) {
 }
 
 func TestLoadMissingFileReturnsEmpty(t *testing.T) {
+	prev := configFile
+	t.Cleanup(func() { configFile = prev })
 	configFile = filepath.Join(t.TempDir(), "missing.json")
 	out, err := LoadConfig()
 	if err != nil {

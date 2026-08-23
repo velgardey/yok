@@ -2,8 +2,10 @@ package utils
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
+	"io/fs"
 	"net/http"
 	"os"
 	"os/signal"
@@ -56,7 +58,10 @@ type ResolvedConfig struct {
 
 // ResolveConfig merges the local config file with defaults and YOK_* env overrides.
 func ResolveConfig() ResolvedConfig {
-	cfg, _ := config.LoadConfig()
+	cfg, err := config.LoadConfig()
+	if err != nil && !errors.Is(err, fs.ErrNotExist) {
+		fmt.Fprintf(os.Stderr, "warning: could not read config file: %v\n", err)
+	}
 	rc := ResolvedConfig{
 		APIURL:     cfg.APIURL,
 		Token:      cfg.Token,
