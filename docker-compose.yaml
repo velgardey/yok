@@ -41,12 +41,10 @@ services:
     environment:
       - PORT=8000
       - API_SERVER_URL=http://api:9000
-      - AWS_S3_BUCKET=${AWS_S3_BUCKET}
-      - AWS_REGION=${AWS_REGION:-ap-south-1}
+      - ARTIFACT_BASE_URL=${ARTIFACT_BASE_URL}
+      - PROXY_SERVICE_TOKEN=${PROXY_SERVICE_TOKEN}
     ports:
       - "8000:8000"
-    volumes:
-      - ~/.aws:/root/.aws:ro
     depends_on:
       - api
     networks:
