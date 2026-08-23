@@ -4,15 +4,42 @@ A platform for building and deploying web applications from Git repositories.
 
 ## Architecture
 
-The project consists of three main components:
+The project consists of three services plus a CLI:
 
-1. **API Server** (Node.js/Express) - Handles project management and deployment
-2. **Reverse Proxy** (Go) - Routes requests to the appropriate deployed applications
-3. **Build Server** (Node.js) - Builds applications from Git repositories
+```
+api/                  API server (Node.js/Express + TypeScript)
+  src/config.ts       zod-typed environment parsing
+  src/routes/         projects, deployments, auth (PAT), resolve, health
+  src/services/       project / deployment / token / user logic
+  src/middleware/     bearer-token auth middleware
+  src/bus/kafka.ts    Kafka consumer wiring
+  src/logs/           ClickHouse log store
+  src/providers/      ComputeProvider seam; aws/ecs.ts selected via CLOUD_PROVIDER
 
-## Deployment
+build-server/         build runner (Node.js, runs as an ECS task)
+  src/index.js        orchestration: build -> upload -> status events
+  src/bus/kafka.js    Kafka producer publishing log + status events
+  src/storage/        storage adapter seam; aws-s3.js selected via STORAGE_PROVIDER
 
-The services are deployed on:
+reverse-proxy/        edge router (Go)
+  main.go             request handling, slug -> deployment resolution, service auth
+  origin.go           OriginResolver seam (S3 today) + per-origin proxy cache
+
+cli/                  Yok CLI (Go/cobra): git wrapper + deploy tool
+```
+
+Request flow: the CLI authenticates to the API with a personal access token. Creating a
+deployment triggers the configured `ComputeProvider` (an ECS Fargate task today), which
+builds the repository and uploads artifacts through the storage adapter while streaming
+logs and status events over Kafka into ClickHouse. The reverse proxy authenticates to the
+API with `PROXY_SERVICE_TOKEN`, resolves `<slug>.<SITE_DOMAIN>` requests through its
+`OriginResolver`, and serves the matching artifact origin.
+
+See [docs/cloud-providers.md](docs/cloud-providers.md) for how to swap any of these pieces
+for another cloud provider.
+
+## Hosted instance
+
 - API: https://api.yok.ninja
 - Reverse Proxy: https://*.yok.ninja
 
@@ -48,6 +75,41 @@ To verify your installation, run:
 yok version
 ```
 
+## Authentication
+
+All API endpoints except `/health` and first-run bootstrap require a Yok personal access
+token (PAT, `yok_...`). Tokens are hashed at rest and expire by default after 90 days.
+
+1. **Bootstrap** (operator, first run only): while the database has zero users, create your
+   admin user:
+
+   ```bash
+   curl -X POST https://api.yok.ninja/auth/bootstrap \
+     -H 'Content-Type: application/json' \
+     -d '{"email":"you@example.com"}'
+   ```
+
+   The response contains the raw token exactly once - save it immediately. Once users exist,
+   this endpoint requires the `X-Bootstrap-Secret` header matching `BOOTSTRAP_SECRET`. See
+   [docs/cloud-providers.md](docs/cloud-providers.md) for the full bootstrap sequence,
+   including creating the reverse proxy service account.
+
+2. **Log in locally**: paste the token into `yok login`. It is validated against `/auth/me`
+   and stored in `.yok-config.json` in your project directory (permissions `0600`) alongside
+   `apiUrl` and `siteDomain`.
+
+3. **Log out**: `yok logout` clears the stored token.
+
+### CI / non-interactive use
+
+Set environment variables instead of relying on the local config file:
+
+- `YOK_TOKEN` - personal access token used for all API requests
+- `YOK_API_URL` - override the API base URL (default: `https://api.yok.ninja`)
+- `YOK_SITE_DOMAIN` - override the deployment domain (default: `yok.ninja`)
+
+Environment variables take precedence over the config file.
+
 ## Getting Started
 
 To use Yok CLI, navigate to your project directory in the terminal:
@@ -58,13 +120,19 @@ cd path/to/your/project
 
 ### First-time Setup
 
-1. Ensure your project is a Git repository. If not, initialize one:
+1. Log in with your Yok token:
+
+   ```bash
+   yok login
+   ```
+
+2. Ensure your project is a Git repository. If not, initialize one:
 
    ```bash
    yok init
    ```
 
-2. Create a new project on Yok:
+3. Create a new project on Yok:
 
    ```bash
    yok create
@@ -73,6 +141,29 @@ cd path/to/your/project
    You'll be prompted to enter a name for your project and specify how to handle the Git repository (auto-detect or manual entry).
 
 ## Commands
+
+### Authentication
+
+#### `yok login`
+
+Authenticates the CLI with your Yok personal access token.
+
+```bash
+yok login
+```
+
+- Prompts you to paste a `yok_...` token (input is hidden)
+- Validates the token against the API (`GET /auth/me`) before saving anything
+- Stores the token plus `apiUrl`/`siteDomain` in `.yok-config.json` (`0600`)
+- Rejected when the token is invalid, expired or revoked
+
+#### `yok logout`
+
+Clears the stored token from `.yok-config.json`.
+
+```bash
+yok logout
+```
 
 ### Project Management
 
@@ -147,6 +238,7 @@ yok status abc123def
 - If no deployment ID is provided, you'll be prompted to select from recent deployments
 - Shows detailed status information including creation time and last update
 - Add the `-l` or `--logs` flag to also view the deployment logs
+- Add the `-a` or `--all` flag to show all deployments, not just recent ones
 
 #### `yok logs [deploymentId]`
 
@@ -159,16 +251,17 @@ yok logs abc123def
 ```
 
 - If no deployment ID is provided, you'll be prompted to select from recent deployments
-- Shows real-time logs as they are generated
-- Automatically exits when the deployment completes
+- By default, fetches and displays the logs recorded so far
+- Add `-f`/`--follow` to stream new logs as they are generated
+- With `--follow` on a running deployment, exits automatically when it completes
 - Press Ctrl+C to stop following logs at any time
 
 Options:
-- `-f, --follow`: Follow logs as they are generated (default: true)
+- `-f, --follow`: Follow logs as they are generated (default: false)
 - `-t, --no-timestamps`: Hide timestamps in log output
 - `-c, --no-color`: Disable colored output
 - `-r, --raw`: Display raw log output without formatting
-- `-w, --wait`: Wait for completion and exit automatically when logs are complete (default: true)
+- `-w, --wait`: Wait for completion and exit automatically when logs are complete (default: false)
 
 #### `yok list`
 
@@ -243,6 +336,21 @@ Once deployed, your site will be available at:
 - `https://[project-slug].yok.ninja`
 - A unique deployment URL for each deployment
 
+## Configuration
+
+All runtime configuration flows through environment variables; committed examples list every
+key each component reads:
+
+- [`.env.example`](.env.example) - compose-level file consumed by `docker-compose.yaml`
+- [`api/.env.example`](api/.env.example) - API server subset
+- [`build-server/.env.example`](build-server/.env.example) - build task subset
+- [`reverse-proxy/.env.example`](reverse-proxy/.env.example) - reverse proxy subset
+
+Provider selection is env-driven: `CLOUD_PROVIDER` picks the API's compute provider,
+`STORAGE_PROVIDER` picks the build server's artifact storage adapter, and
+`ARTIFACT_BASE_URL` points the reverse proxy at the artifact origin. To run Yok on another
+cloud (e.g. Azure), see [docs/cloud-providers.md](docs/cloud-providers.md).
+
 ## Troubleshooting
 
 ### Common Issues
@@ -261,4 +369,9 @@ Once deployed, your site will be available at:
 4. **"Failed to deploy project"**
    - Check your internet connection
    - Verify your Git repository is accessible
+
+5. **"401 Unauthorized" / "Invalid or expired token"**
+   - Your stored token is missing, expired or revoked - run `yok login` again
+   - In CI, check that `YOK_TOKEN` is set and has not expired (tokens expire after 90 days
+     unless created with a custom expiry)
 
