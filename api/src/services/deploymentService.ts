@@ -7,10 +7,7 @@ export function createQueuedDeployment(projectId: string) {
 }
 
 export async function promoteLatestDeployment(projectId: string, deploymentId: string) {
-  await prisma.$transaction([
-    prisma.deployment.update({ where: { id: deploymentId }, data: { status: 'QUEUED' } }),
-    prisma.project.update({ where: { id: projectId }, data: { latestDeploymentId: deploymentId } }),
-  ]);
+  await prisma.project.update({ where: { id: projectId }, data: { latestDeploymentId: deploymentId } });
 }
 
 export function markFailed(deploymentId: string) {

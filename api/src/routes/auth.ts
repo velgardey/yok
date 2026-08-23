@@ -1,6 +1,6 @@
 import { Router } from 'express';
 import type { AppConfig } from '../config';
-import { requireAuth, requireServiceAuth, type AuthedRequest } from '../middleware/auth';
+import { requireAuth, type AuthedRequest } from '../middleware/auth';
 import { countUsers, createUser, findUserByEmail } from '../services/userService';
 import { createToken, revokeToken } from '../services/tokenService';
 import { prisma } from '../db/prisma';
@@ -60,6 +60,5 @@ export function authRouter(config: AppConfig): Router {
     res.status(200).json({ status: 'success', data: { tokens } });
   });
 
-  void requireServiceAuth;
   return router;
 }
