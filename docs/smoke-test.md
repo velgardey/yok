@@ -53,8 +53,9 @@ after completing the bootstrap steps in [cloud-providers.md](cloud-providers.md)
    yok status
    ```
 
-   Status should progress through the active states (PENDING/QUEUED/IN_PROGRESS/BUILDING/
-   UPLOADING) and end at **COMPLETED**, with a public/deployment URL shown.
+   Status should progress through the active states (PENDING/QUEUED/IN_PROGRESS) and end
+   at **COMPLETED** (or **FAILED** if the build breaks), with a public/deployment URL shown
+   on success.
 
 7. **Cancel on terminal state returns an error** — attempt to cancel the finished
    deployment by its ID:
