@@ -16,6 +16,7 @@ terraform/yok-key.pem
 
 # Build outputs
 /api/generated/
+/api/src/generated/
 /api/*.js
 /api/*.js.map
 /api/*.d.ts

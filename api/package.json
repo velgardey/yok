@@ -2,7 +2,7 @@
   "name": "api",
   "version": "1.0.0",
   "description": "",
-  "main": "index.js",
+  "main": "dist/index.js",
   "scripts": {
     "dev": "tsx watch --env-file=.env src/index.ts",
     "build": "tsc",
@@ -20,18 +20,15 @@
     "@clickhouse/client": "^1.11.2",
     "@prisma/client": "^6.10.0",
     "cors": "^2.8.5",
-    "dotenv": "^16.5.0",
     "express": "^5.1.0",
     "kafkajs": "^2.2.4",
     "random-word-slugs": "^0.1.7",
-    "uuid": "^11.1.0",
     "zod": "^4.0.0"
   },
   "devDependencies": {
     "@types/cors": "^2.8.19",
     "@types/express": "^5.0.3",
     "@types/node": "^24.0.3",
-    "@types/uuid": "^10.0.0",
     "prisma": "^6.10.0",
     "tsx": "^4.19.2",
     "typescript": "^5.8.3",

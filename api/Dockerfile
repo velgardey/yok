@@ -17,4 +17,4 @@ RUN pnpm run build
 
 EXPOSE 9000
 
-CMD ["node", "index.js"]
+CMD ["node", "dist/index.js"]

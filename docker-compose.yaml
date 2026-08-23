@@ -5,14 +5,19 @@ services:
     restart: always
     environment:
       - PORT=9000
+      - CLOUD_PROVIDER=${CLOUD_PROVIDER:-aws}
+      - SITE_DOMAIN=${SITE_DOMAIN:-yok.ninja}
       - DATABASE_URL=${DATABASE_URL}
       - DIRECT_URL=${DIRECT_URL}
       - KAFKA_BROKER=${KAFKA_BROKER}
       - KAFKA_USERNAME=${KAFKA_USERNAME}
       - KAFKA_PASSWORD=${KAFKA_PASSWORD}
       - KAFKA_TOPIC=${KAFKA_TOPIC}
+      - KAFKA_CA_PATH=/app/ca.pem
       - CLICKHOUSE_URL=${CLICKHOUSE_URL}
       - CLICKHOUSE_DATABASE=${CLICKHOUSE_DATABASE}
+      - PROXY_SERVICE_TOKEN=${PROXY_SERVICE_TOKEN}
+      - BOOTSTRAP_SECRET=${BOOTSTRAP_SECRET}
       - AWS_ACCESS_KEY_ID
       - AWS_SECRET_ACCESS_KEY
       - AWS_REGION=${AWS_REGION:-ap-south-1}
@@ -21,13 +26,11 @@ services:
       - AWS_ECS_CONTAINER_NAME=${AWS_ECS_CONTAINER_NAME}
       - AWS_ECS_SUBNETS=${AWS_ECS_SUBNETS}
       - AWS_ECS_SECURITY_GROUPS=${AWS_ECS_SECURITY_GROUPS}
-      - AWS_S3_BUCKET=${AWS_S3_BUCKET}
     ports:
       - "9000:9000"
     volumes:
-      - ./api/prisma/ca.pem:/app/ca.pem:ro
       - ./api/prisma:/app/prisma:ro
-      - ~/.aws:/root/.aws:ro
+      - ./api/ca.pem:/app/ca.pem:ro
     networks:
       - yok-network
 
