@@ -74,13 +74,6 @@ type DeploymentStatusResponse struct {
 	} `json:"data"`
 }
 
-// GitHubRelease represents GitHub release information
-type GitHubRelease struct {
-	TagName    string `json:"tag_name"`
-	Name       string `json:"name"`
-	Prerelease bool   `json:"prerelease"`
-}
-
 // LogEntry represents a single log entry
 type LogEntry struct {
 	EventID      string `json:"event_id"`

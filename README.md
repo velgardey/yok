@@ -287,9 +287,12 @@ yok cancel abc123def
 - If no deployment ID is provided, you'll be prompted to select from in-progress deployments
 - Requires confirmation before cancellation
 
-**Limitations:** Cancellation updates the deployment's status in the database only. It does
-not stop the running build task (e.g., the ECS Fargate task), because task identifiers are
-not persisted; the compute task keeps running until it finishes on its own.
+When the platform records the compute task identifier (e.g., the ECS Fargate task ARN),
+cancellation also stops the running task. A build that finishes after cancellation anyway
+is ignored: terminal deployment states are final.
+
+**Note:** the site keeps serving the previous deployment until a build reports `COMPLETED`,
+so failed or cancelled builds never take a working site down.
 
 ### Git Integration
 
@@ -356,6 +359,13 @@ Provider selection is env-driven: `CLOUD_PROVIDER` picks the API's compute provi
 cloud (e.g. Azure), see [docs/cloud-providers.md](docs/cloud-providers.md). For an
 end-to-end manual verification of a fresh stack, see
 [docs/smoke-test.md](docs/smoke-test.md).
+
+Two one-time setup steps are required for a fresh stack:
+
+- Apply the Prisma migrations (`pnpm prisma migrate deploy` in `api/`) and the ClickHouse
+  log table ([`api/clickhouse/schema.sql`](api/clickhouse/schema.sql)).
+- Kafka TLS uses the default trust store by default; mount a custom CA and point
+  `KAFKA_CA_PATH` at it only if your broker requires one.
 
 ## Troubleshooting
 

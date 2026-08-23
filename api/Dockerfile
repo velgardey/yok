@@ -9,11 +9,11 @@ COPY package.json pnpm-lock.yaml pnpm-workspace.yaml ./
 RUN pnpm install
 
 COPY prisma ./prisma/
-COPY ca.pem ./
 
 COPY . .
-RUN pnpm prisma generate
-RUN pnpm run build
+# Optional Kafka CA: mount ca.pem into the container at runtime and set
+# KAFKA_CA_PATH when the broker needs a custom certificate authority.
+RUN pnpm prisma generate && pnpm run build
 
 EXPOSE 9000
 

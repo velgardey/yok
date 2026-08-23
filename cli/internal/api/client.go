@@ -398,7 +398,7 @@ func SelectDeploymentFromList(projectID string, filter func(types.Deployment) bo
 	for i, d := range filteredDeployments {
 		timeAgo := time.Since(d.CreatedAt).Round(time.Second)
 		options[i] = fmt.Sprintf("%s (%s) - %s - %s ago",
-			d.ID[:8], d.Status, d.CreatedAt.Format("Jan 02 15:04"), timeAgo)
+			shortID(d.ID), d.Status, d.CreatedAt.Format("Jan 02 15:04"), timeAgo)
 	}
 
 	var selected int
@@ -407,9 +407,20 @@ func SelectDeploymentFromList(projectID string, filter func(types.Deployment) bo
 		Options: options,
 	}
 	opts := utils.GetSurveyOptions()
-	survey.AskOne(prompt, &selected, opts)
+	if err := survey.AskOne(prompt, &selected, opts); err != nil {
+		return "", fmt.Errorf("deployment selection cancelled")
+	}
 
 	return filteredDeployments[selected].ID, nil
+}
+
+// shortID truncates a deployment ID for display without panicking on
+// unexpectedly short IDs.
+func shortID(id string) string {
+	if len(id) <= 8 {
+		return id
+	}
+	return id[:8]
 }
 
 // DetectFramework detects the framework used in the repository
@@ -454,7 +465,10 @@ func autoDetectRepoURL() (string, error) {
 	return remoteURL, nil
 }
 
-// detectFrameworkFromPackageJSON analyzes package.json to detect framework
+// detectFrameworkFromPackageJSON analyzes package.json to detect framework.
+// Checked in order of specificity - a Next.js app also depends on react, so
+// "next" must win; this is why the list is a slice, not a map (maps would
+// randomize the match order).
 func detectFrameworkFromPackageJSON(filename string) string {
 	data, err := os.ReadFile(filename)
 	if err != nil {
@@ -463,19 +477,17 @@ func detectFrameworkFromPackageJSON(filename string) string {
 
 	content := string(data)
 
-	// Check for frameworks in order of specificity
-	frameworks := map[string]string{
-		"next":    "NEXT",
-		"vite":    "VITE",
-		"svelte":  "SVELTE",
-		"react":   "REACT",
-		"vue":     "VUE",
-		"angular": "ANGULAR",
+	frameworks := []struct{ keyword, name string }{
+		{"next", "NEXT"},
+		{"vite", "VITE"},
+		{"svelte", "SVELTE"},
+		{"@angular/core", "ANGULAR"},
+		{"react", "REACT"},
+		{"vue", "VUE"},
 	}
-
-	for keyword, framework := range frameworks {
-		if strings.Contains(content, keyword) {
-			return framework
+	for _, fw := range frameworks {
+		if strings.Contains(content, fw.keyword) {
+			return fw.name
 		}
 	}
 
@@ -592,16 +604,9 @@ func PromptForProjectCreationDetails() (string, string, string, *types.Project, 
 	return projectName, repoURL, framework, nil, false, nil
 }
 
-// GetDeploymentLogs fetches logs for a specific deployment
-func GetDeploymentLogs(deploymentID string, lastEventID string) (*types.LogsResponse, error) {
-	reqURL := fmt.Sprintf("%s/logs/%s", utils.ResolveConfig().APIURL, deploymentID)
-
-	// Add lastEventID as query parameter if it exists
-	if lastEventID != "" {
-		reqURL = fmt.Sprintf("%s?lastEventID=%s", reqURL, lastEventID)
-	}
-
-	req, err := http.NewRequest(http.MethodGet, reqURL, nil)
+// GetDeploymentLogs fetches all logs for a specific deployment
+func GetDeploymentLogs(deploymentID string) (*types.LogsResponse, error) {
+	req, err := http.NewRequest(http.MethodGet, fmt.Sprintf("%s/logs/%s", utils.ResolveConfig().APIURL, deploymentID), nil)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create request: %w", err)
 	}
@@ -629,7 +634,6 @@ func GetDeploymentLogs(deploymentID string, lastEventID string) (*types.LogsResp
 // StreamDeploymentLogs continuously fetches and displays logs for a deployment
 // It polls until the deployment is complete or stopChan receives a value
 func StreamDeploymentLogs(deploymentID string, stopChan chan bool) bool {
-	var lastEventID string
 	var lastErrorMessage string
 
 	// Use the configured renderer or create a new default one
@@ -638,7 +642,8 @@ func StreamDeploymentLogs(deploymentID string, stopChan chan bool) bool {
 		logRenderer = utils.NewLogRenderer()
 	}
 
-	// Keep track of logs we've already seen to avoid duplicates
+	// The API returns the full log set on each poll; seenLogs dedupes it so
+	// only new entries are rendered.
 	seenLogs := make(map[string]bool)
 
 	render := func(logs []types.LogEntry) {
@@ -649,7 +654,6 @@ func StreamDeploymentLogs(deploymentID string, stopChan chan bool) bool {
 
 			seenLogs[logEntry.EventID] = true
 			logRenderer.RenderLogEntry(logEntry)
-			lastEventID = logEntry.EventID
 
 			if strings.Contains(logEntry.Log, "Error:") || strings.Contains(logEntry.Log, "Failed:") {
 				lastErrorMessage = logEntry.Log
@@ -658,7 +662,7 @@ func StreamDeploymentLogs(deploymentID string, stopChan chan bool) bool {
 	}
 
 	// First fetch to get initial logs
-	logs, err := GetDeploymentLogs(deploymentID, "")
+	logs, err := GetDeploymentLogs(deploymentID)
 	if err != nil {
 		utils.ErrorColor.Printf("Error fetching logs: %v\n", err)
 		return false
@@ -672,8 +676,8 @@ func StreamDeploymentLogs(deploymentID string, stopChan chan bool) bool {
 	for {
 		select {
 		case <-ticker.C:
-			// Fetch new logs since the last event ID
-			newLogs, err := GetDeploymentLogs(deploymentID, lastEventID)
+			// Fetch logs and render any new entries since the last poll
+			newLogs, err := GetDeploymentLogs(deploymentID)
 			if err != nil {
 				utils.ErrorColor.Printf("Error fetching logs: %v\n", err)
 				continue

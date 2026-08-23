@@ -76,7 +76,7 @@ func runLogs(cmd *cobra.Command, args []string) {
 		utils.SuccessColor.Println(deployment.Status)
 	case "FAILED":
 		utils.ErrorColor.Println(deployment.Status)
-	case "BUILDING", "UPLOADING", "PENDING":
+	case "PENDING", "QUEUED", "IN_PROGRESS":
 		utils.WarnColor.Println(deployment.Status)
 	default:
 		utils.InfoColor.Println(deployment.Status)
@@ -130,7 +130,7 @@ func runLogs(cmd *cobra.Command, args []string) {
 	}
 
 	// For non-follow mode, just fetch and display logs once
-	logs, err := api.GetDeploymentLogs(deploymentID, "")
+	logs, err := api.GetDeploymentLogs(deploymentID)
 	utils.HandleError(err, "Error fetching logs")
 
 	for _, logEntry := range logs.Data.Logs {

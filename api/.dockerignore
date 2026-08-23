@@ -1,6 +1,7 @@
 node_modules
 .git
 .env
+ca.pem
 npm-debug.log
 .idea
 .vscode

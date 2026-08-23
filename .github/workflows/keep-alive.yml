@@ -7,6 +7,9 @@ on:
   # Allow manual triggering
   workflow_dispatch:
 
+env:
+  PROXY_PING_HOST: ${{ vars.PROXY_PING_HOST || 'yok.ninja' }}
+
 jobs:
   ping:
     runs-on: ubuntu-latest
@@ -18,21 +21,21 @@ jobs:
           STATUS=$(curl -s -o /dev/null -w "%{http_code}" https://api.yok.ninja/health || echo "failed")
           echo "API Status: $STATUS"
           echo "status=$STATUS" >> $GITHUB_OUTPUT
-        
+
       - name: Ping Reverse Proxy
         id: ping-proxy
         run: |
-          echo "Pinging Reverse Proxy service at $(date)"
-          STATUS=$(curl -s -o /dev/null -w "%{http_code}" https://01d7f245-ed3a-4153-9305-2e1f52b40256.yok.ninja || echo "failed")
+          echo "Pinging Reverse Proxy at $(date)"
+          STATUS=$(curl -s -o /dev/null -w "%{http_code}" "https://$PROXY_PING_HOST" || echo "failed")
           echo "Reverse Proxy Status: $STATUS"
           echo "status=$STATUS" >> $GITHUB_OUTPUT
-          
+
       - name: Report Status
         id: report
         run: |
           echo "API Status: ${{ steps.ping-api.outputs.status }}"
           echo "Reverse Proxy Status: ${{ steps.ping-proxy.outputs.status }}"
-          
+
           if [[ "${{ steps.ping-api.outputs.status }}" != "200" || "${{ steps.ping-proxy.outputs.status }}" != "200" ]]; then
             echo "is_down=true" >> $GITHUB_OUTPUT
             echo "⚠️ One or more services returned a non-200 status code"
@@ -40,4 +43,3 @@ jobs:
             echo "is_down=false" >> $GITHUB_OUTPUT
             echo "✅ All services are up and running"
           fi
-        

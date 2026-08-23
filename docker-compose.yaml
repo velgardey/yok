@@ -13,7 +13,7 @@ services:
       - KAFKA_USERNAME=${KAFKA_USERNAME}
       - KAFKA_PASSWORD=${KAFKA_PASSWORD}
       - KAFKA_TOPIC=${KAFKA_TOPIC}
-      - KAFKA_CA_PATH=/app/ca.pem
+      - KAFKA_CA_PATH=${KAFKA_CA_PATH:-}
       - CLICKHOUSE_URL=${CLICKHOUSE_URL}
       - CLICKHOUSE_DATABASE=${CLICKHOUSE_DATABASE}
       - PROXY_SERVICE_TOKEN=${PROXY_SERVICE_TOKEN}
@@ -30,7 +30,6 @@ services:
       - "9000:9000"
     volumes:
       - ./api/prisma:/app/prisma:ro
-      - ./api/ca.pem:/app/ca.pem:ro
     networks:
       - yok-network
 
@@ -41,6 +40,7 @@ services:
     environment:
       - PORT=8000
       - API_SERVER_URL=http://api:9000
+      - SITE_DOMAIN=${SITE_DOMAIN:-yok.ninja}
       - ARTIFACT_BASE_URL=${ARTIFACT_BASE_URL}
       - PROXY_SERVICE_TOKEN=${PROXY_SERVICE_TOKEN}
     ports:

@@ -17,6 +17,6 @@ export function findProjectBySlug(slug: string) {
   return prisma.project.findUnique({ where: { slug } });
 }
 
-export function createProject(userId: string, data: { name: string; gitRepoUrl: string; framework: 'NEXT' | 'REACT' | 'VUE' | 'ANGULAR' | 'SVELTE' | 'OTHER' | 'VITE' }) {
+export function createProject(userId: string, data: { name: string; gitRepoUrl: string; framework: 'NEXT' | 'REACT' | 'VUE' | 'ANGULAR' | 'SVELTE' | 'OTHER' | 'VITE' | 'STATIC' }) {
   return prisma.project.create({ data: { ...data, slug: generateSlug(), userId } });
 }

@@ -12,7 +12,6 @@ RUN pnpm install
 
 COPY main.sh ./
 COPY src ./src
-COPY ca.pem ./
 
 RUN chmod +x main.sh
 

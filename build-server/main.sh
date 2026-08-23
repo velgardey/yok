@@ -1,9 +1,8 @@
 #!/bin/bash
+set -euo pipefail
 
-export GIT_REPO_URL=$GIT_REPO_URL
-
-echo "Cloning repository..." $GIT_REPO_URL
-git clone $GIT_REPO_URL /app/output
+echo "Cloning repository..."
+git clone "$GIT_REPO_URL" /app/output
 echo "Repository cloned successfully"
 
 exec node src/index.js

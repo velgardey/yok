@@ -14,6 +14,7 @@ const envSchema = z.object({
   CLICKHOUSE_DATABASE: z.string().min(1),
   PROXY_SERVICE_TOKEN: z.string().min(1),
   BOOTSTRAP_SECRET: z.string().optional(),
+  STALE_DEPLOYMENT_MINUTES: z.coerce.number().int().positive().default(30),
 });
 
 export interface AppConfig {
@@ -25,6 +26,7 @@ export interface AppConfig {
   clickhouse: { url: string; database: string };
   proxyServiceToken: string;
   bootstrapSecret?: string;
+  staleDeploymentMinutes: number;
 }
 
 export function loadConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
@@ -49,5 +51,6 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
     clickhouse: { url: e.CLICKHOUSE_URL, database: e.CLICKHOUSE_DATABASE },
     proxyServiceToken: e.PROXY_SERVICE_TOKEN,
     bootstrapSecret: e.BOOTSTRAP_SECRET,
+    staleDeploymentMinutes: e.STALE_DEPLOYMENT_MINUTES,
   };
 }

@@ -4,7 +4,8 @@ import type { AppConfig } from '../config';
 
 const baseCfg = {
   port: 9000, cloudProvider: 'aws', siteDomain: 'x.ninja',
-  databaseUrl: 'postgres://x', proxyServiceToken: 't',
+  databaseUrl: 'postgres://x', proxyServiceToken: 't', bootstrapSecret: undefined,
+  staleDeploymentMinutes: 30,
   kafka: { broker: 'b', username: 'u', password: 'p', topic: 't' },
   clickhouse: { url: 'https://c', database: 'd' },
 } satisfies AppConfig;

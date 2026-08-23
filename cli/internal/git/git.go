@@ -25,12 +25,6 @@ func ExecuteCommand(args ...string) (string, error) {
 	return stdout.String(), nil
 }
 
-// GetRepoInfo gets repository information from the current directory or prompts user
-// DEPRECATED: This function is no longer used. Use API client functions instead.
-func GetRepoInfo(useManualEntry bool) (string, string, error) {
-	return "", "", fmt.Errorf("GetRepoInfo is deprecated - use API client functions instead")
-}
-
 // GetRemoteURL gets the remote URL using git command
 func GetRemoteURL() (string, error) {
 	// Try to get origin remote first (most common case)

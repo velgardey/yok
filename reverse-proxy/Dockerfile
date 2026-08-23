@@ -5,9 +5,9 @@ WORKDIR /app
 COPY go.mod go.sum ./
 RUN go mod download
 
-COPY main.go ./
+COPY . .
 
-RUN go build -o reverse-proxy main.go
+RUN go build -o reverse-proxy .
 
 FROM alpine:latest
 

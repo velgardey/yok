@@ -1,9 +1,18 @@
 import { Router } from 'express';
+import { timingSafeEqual } from 'crypto';
 import type { AppConfig } from '../config';
 import { requireAuth, type AuthedRequest } from '../middleware/auth';
 import { countUsers, createUser, findUserByEmail } from '../services/userService';
 import { createToken, revokeToken } from '../services/tokenService';
 import { prisma } from '../db/prisma';
+
+function secretMatches(secret: string | string[] | undefined, expected: string): boolean {
+  const value = Array.isArray(secret) ? secret[0] : secret;
+  if (value === undefined) return false;
+  const a = Buffer.from(value);
+  const b = Buffer.from(expected);
+  return a.length === b.length && timingSafeEqual(a, b);
+}
 
 export function authRouter(config: AppConfig): Router {
   const router = Router();
@@ -11,7 +20,7 @@ export function authRouter(config: AppConfig): Router {
   router.post('/auth/bootstrap', async (req, res) => {
     const secret = req.headers['x-bootstrap-secret'];
     const usersExist = (await countUsers()) > 0;
-    if (usersExist && (!config.bootstrapSecret || secret !== config.bootstrapSecret)) {
+    if (usersExist && (!config.bootstrapSecret || !secretMatches(secret, config.bootstrapSecret))) {
       res.status(403).json({ status: 'error', message: 'Bootstrap already completed' });
       return;
     }

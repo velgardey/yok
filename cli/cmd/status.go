@@ -182,7 +182,7 @@ func runStatus(cmd *cobra.Command, args []string) {
 		utils.SuccessColor.Println(deployment.Status)
 	case "FAILED":
 		utils.ErrorColor.Println(deployment.Status)
-	case "BUILDING", "UPLOADING", "PENDING":
+	case "PENDING", "QUEUED", "IN_PROGRESS":
 		utils.WarnColor.Println(deployment.Status)
 	default:
 		fmt.Println(deployment.Status)
@@ -212,7 +212,7 @@ func runStatus(cmd *cobra.Command, args []string) {
 		fmt.Println()
 
 		// Fetch logs
-		logs, err := api.GetDeploymentLogs(deploymentID, "")
+		logs, err := api.GetDeploymentLogs(deploymentID)
 		utils.HandleError(err, "Error fetching logs")
 
 		// Create log renderer

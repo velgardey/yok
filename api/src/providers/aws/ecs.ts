@@ -1,5 +1,5 @@
-import { ECSClient, RunTaskCommand } from '@aws-sdk/client-ecs';
-import type { BuildTaskInput, ComputeProvider } from '../types';
+import { ECSClient, RunTaskCommand, StopTaskCommand } from '@aws-sdk/client-ecs';
+import type { BuildTaskHandle, BuildTaskInput, ComputeProvider } from '../types';
 
 export interface EcsConfig {
   region: string;
@@ -40,7 +40,7 @@ export class EcsComputeProvider implements ComputeProvider {
     });
   }
 
-  async runBuildTask(input: BuildTaskInput): Promise<void> {
+  async runBuildTask(input: BuildTaskInput): Promise<BuildTaskHandle> {
     const command = new RunTaskCommand({
       cluster: this.cfg.cluster,
       taskDefinition: this.cfg.taskDefinition,
@@ -67,6 +67,14 @@ export class EcsComputeProvider implements ComputeProvider {
         ],
       },
     });
-    await this.client.send(command);
+    const response = await this.client.send(command);
+    const taskArn = response.tasks?.[0]?.taskArn;
+    return taskArn ? { taskArn } : {};
+  }
+
+  async stopBuildTask(taskArn: string): Promise<void> {
+    await this.client.send(
+      new StopTaskCommand({ cluster: this.cfg.cluster, task: taskArn, reason: 'Deployment cancelled' })
+    );
   }
 }

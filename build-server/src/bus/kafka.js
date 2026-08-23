@@ -6,7 +6,7 @@ const VALID_STATUSES = ['PENDING', 'QUEUED', 'IN_PROGRESS', 'COMPLETED', 'FAILED
 function createProducerFromEnv(env = process.env) {
   const ssl = env.KAFKA_CA_PATH
     ? { ca: [fs.readFileSync(env.KAFKA_CA_PATH, 'utf-8')] }
-    : true;
+    : env.KAFKA_SSL !== 'false';
   const kafka = new Kafka({
     clientId: `build-server-${env.DEPLOYMENT_ID}`,
     brokers: [env.KAFKA_BROKER],
@@ -14,6 +14,7 @@ function createProducerFromEnv(env = process.env) {
     sasl: { username: env.KAFKA_USERNAME, password: env.KAFKA_PASSWORD, mechanism: 'plain' },
   });
   return kafka.producer({
+    idempotent: true,
     createPartitioner: Partitioners.DefaultPartitioner,
     allowAutoTopicCreation: false,
   });
@@ -51,15 +52,21 @@ class Publisher {
   async log(log) {
     await this.producer.send({
       topic: this.topic,
-      messages: [{ key: 'log', value: JSON.stringify(logMessage({ ...this.base, log })) }],
+      // Keyed by deployment so all events for one build land on the same
+      // partition and are observed in order by the consumer.
+      messages: [{ key: this.base.deploymentId, value: JSON.stringify(logMessage({ ...this.base, log })) }],
     });
   }
 
   async status(status) {
     await this.producer.send({
       topic: this.topic,
-      messages: [{ key: 'status', value: JSON.stringify(statusMessage({ ...this.base, status })) }],
+      messages: [{ key: this.base.deploymentId, value: JSON.stringify(statusMessage({ ...this.base, status })) }],
     });
+  }
+
+  async disconnect() {
+    await this.producer.disconnect();
   }
 }
 

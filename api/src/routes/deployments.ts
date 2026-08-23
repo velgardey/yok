@@ -9,11 +9,15 @@ import {
   createQueuedDeployment,
   markFailed,
   ownedDeploymentOrError,
-  promoteLatestDeployment,
+  setTaskArn,
 } from '../services/deploymentService';
 import { LogStore } from '../logs/clickhouse';
 
 const uuidSchema = z.uuid();
+
+function deploymentUrl(deploymentId: string, config: AppConfig): string {
+  return `https://${deploymentId}.${config.siteDomain}/`;
+}
 
 export function deploymentsRouter(config: AppConfig, logStore: LogStore): Router {
   const router = Router();
@@ -32,20 +36,24 @@ export function deploymentsRouter(config: AppConfig, logStore: LogStore): Router
     }
 
     const deployment = await createQueuedDeployment(project.id);
-    await promoteLatestDeployment(project.id, deployment.id);
 
     try {
-      await compute.runBuildTask({
+      // The project keeps pointing at the previous deployment until the build
+      // reports COMPLETED; promotion happens in the Kafka status consumer.
+      const { taskArn } = await compute.runBuildTask({
         projectId: project.id,
         deploymentId: deployment.id,
         gitRepoUrl: project.gitRepoUrl,
         framework: project.framework,
       });
+      if (taskArn) {
+        await setTaskArn(deployment.id, taskArn);
+      }
       res.status(202).json({
         status: 'success',
         data: {
           deploymentId: deployment.id,
-          deploymentUrl: `https://${deployment.id}.${config.siteDomain}/`,
+          deploymentUrl: deploymentUrl(deployment.id, config),
         },
       });
     } catch (error) {
@@ -80,7 +88,15 @@ export function deploymentsRouter(config: AppConfig, logStore: LogStore): Router
       res.status(owned.error === 'FORBIDDEN' ? 403 : 404).json({ status: 'error', message: 'Deployment not found' });
       return;
     }
-    res.status(200).json({ status: 'success', data: { deployment: owned.deployment } });
+    res.status(200).json({
+      status: 'success',
+      data: {
+        deployment: {
+          ...owned.deployment,
+          deploymentUrl: deploymentUrl(owned.deployment.id, config),
+        },
+      },
+    });
   });
 
   router.post('/deployment/:id/cancel', requireAuth, async (req, res) => {
@@ -94,6 +110,15 @@ export function deploymentsRouter(config: AppConfig, logStore: LogStore): Router
       const status = result.error === 'NOT_FOUND' ? 404 : result.error === 'FORBIDDEN' ? 403 : 400;
       res.status(status).json({ status: 'error', message: `Cannot cancel deployment (${result.error})` });
       return;
+    }
+    // Best-effort stop of the running build task; the DB status is already FAILED
+    // and the consumer ignores late events, so a failed stop cannot resurrect it.
+    if (result.taskArn) {
+      try {
+        await compute.stopBuildTask(result.taskArn);
+      } catch (error) {
+        console.error('Failed to stop build task:', error);
+      }
     }
     res.status(200).json({ status: 'success', message: 'Deployment cancelled successfully' });
   });

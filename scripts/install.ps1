@@ -71,6 +71,21 @@ try {
         Write-Host "Download complete, file size: $FileSize bytes" -ForegroundColor Green
     }
 
+    # Verify the download against the checksums published by goreleaser
+    Write-Host "Verifying download..." -ForegroundColor Cyan
+    try {
+        $ChecksumsUrl = "https://github.com/$GithubRepo/releases/download/$Version/checksums.txt"
+        $ChecksumsPath = "$env:TEMP\yok_checksums.txt"
+        Invoke-WebRequest -Uri $ChecksumsUrl -OutFile $ChecksumsPath
+        $Expected = (Select-String -Path $ChecksumsPath -Pattern ([regex]::Escape($ArchiveName))).Line.Split(' ')[0]
+        $Actual = (Get-FileHash -Path $ZipPath -Algorithm SHA256).Hash.ToLower()
+        Remove-Item $ChecksumsPath -Force -ErrorAction SilentlyContinue
+        if (-not $Expected) { Handle-Error "No checksum found for $ArchiveName in checksums.txt" }
+        if ($Expected -ne $Actual) { Handle-Error "Checksum mismatch for $ArchiveName (expected $Expected, got $Actual)" }
+    } catch {
+        Handle-Error "Failed to verify the download against checksums.txt" $_
+    }
+
     # Extract the binary
     Write-Host "Extracting..." -ForegroundColor Cyan
     try {

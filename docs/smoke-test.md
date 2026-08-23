@@ -4,6 +4,9 @@ End-to-end verification of the auth + deploy path after a fresh stack bring-up. 
 after completing the bootstrap steps in [cloud-providers.md](cloud-providers.md)
 (Operations → First-run bootstrap sequence), or against any running stack.
 
+Prerequisite: the ClickHouse database must contain the `log_events` table — apply
+[`api/clickhouse/schema.sql`](../api/clickhouse/schema.sql) once per `CLICKHOUSE_DATABASE`.
+
 ## Steps
 
 1. **Bootstrap** — while zero users exist, create the admin user:
@@ -68,9 +71,15 @@ after completing the bootstrap steps in [cloud-providers.md](cloud-providers.md)
    `Failed to cancel deployment: ... Cannot cancel deployment (...)` rather than a success
    message.
 
-## Known caveat: log/status ordering
+## Log/status ordering
 
-The build server publishes log lines and status updates as separate Kafka messages, and
-Kafka gives no ordering guarantees across partitions. As a result, the **COMPLETED** status
-can be recorded before the last few log lines are stored — so `yok logs` may briefly miss
-the tail of the output even though the deployment already reports COMPLETED.
+The build server keys all Kafka messages by deployment ID, so every event for one build
+lands on the same partition and is consumed in order. It also drains pending log sends
+before publishing the terminal status, so `yok logs` shows the complete output once a
+deployment reports COMPLETED.
+
+## Stale builds
+
+If a build task dies without reporting (e.g. the ECS task is killed), the API's safety
+sweep marks deployments that stayed active past `STALE_DEPLOYMENT_MINUTES` (default 30)
+as FAILED, so `yok status` never hangs on IN_PROGRESS forever.

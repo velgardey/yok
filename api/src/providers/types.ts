@@ -5,6 +5,11 @@ export interface BuildTaskInput {
   framework: string;
 }
 
+export interface BuildTaskHandle {
+  taskArn?: string;
+}
+
 export interface ComputeProvider {
-  runBuildTask(input: BuildTaskInput): Promise<void>;
+  runBuildTask(input: BuildTaskInput): Promise<BuildTaskHandle>;
+  stopBuildTask(taskArn: string): Promise<void>;
 }
