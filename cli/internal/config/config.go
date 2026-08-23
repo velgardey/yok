@@ -8,23 +8,26 @@ import (
 	"strings"
 
 	"github.com/velgardey/yok/cli/internal/types"
-	"github.com/velgardey/yok/cli/internal/utils"
 )
+
+// configFile is the path of the local configuration file, relative to the
+// working directory. It is a var so tests can point it at a temp location.
+var configFile = ".yok-config.json"
 
 // SaveConfig saves the configuration to a local file
 func SaveConfig(config types.Config) error {
-	// Validate configuration before saving
-	if err := ValidateConfig(config); err != nil {
-		return fmt.Errorf("invalid configuration: %w", err)
-	}
-
 	jsonData, err := json.MarshalIndent(config, "", "  ")
 	if err != nil {
 		return fmt.Errorf("failed to marshal config: %w", err)
 	}
 
-	if err := os.WriteFile(utils.ConfigFile, jsonData, 0644); err != nil {
+	if err := os.WriteFile(configFile, jsonData, 0600); err != nil {
 		return fmt.Errorf("failed to write config file: %w", err)
+	}
+
+	// Tighten permissions on pre-existing files created with older versions.
+	if err := os.Chmod(configFile, 0600); err != nil {
+		return fmt.Errorf("failed to set config file permissions: %w", err)
 	}
 
 	return nil
@@ -34,7 +37,7 @@ func SaveConfig(config types.Config) error {
 func LoadConfig() (types.Config, error) {
 	var config types.Config
 
-	data, err := os.ReadFile(utils.ConfigFile)
+	data, err := os.ReadFile(configFile)
 	if err != nil {
 		if os.IsNotExist(err) {
 			return config, nil // Return empty config if file doesn't exist
@@ -46,20 +49,13 @@ func LoadConfig() (types.Config, error) {
 		return config, fmt.Errorf("failed to parse config file: %w", err)
 	}
 
+	config.ProjectID = strings.TrimSpace(config.ProjectID)
+	config.RepoName = strings.TrimSpace(config.RepoName)
+	config.APIURL = strings.TrimSpace(config.APIURL)
+	config.Token = strings.TrimSpace(config.Token)
+	config.SiteDomain = strings.TrimSpace(config.SiteDomain)
+
 	return config, nil
-}
-
-// GetProjectIDOrExit loads the config and exits if no project ID is found
-func GetProjectIDOrExit() types.Config {
-	config, err := LoadConfig()
-	utils.HandleError(err, "Error loading configuration")
-
-	if config.ProjectID == "" {
-		utils.ErrorColor.Println("No project configured. Run 'yok create' or 'yok deploy' first.")
-		os.Exit(1)
-	}
-
-	return config
 }
 
 // RemoveConfig deletes the configuration file
@@ -69,22 +65,9 @@ func RemoveConfig() error {
 		return fmt.Errorf("failed to get current directory: %w", err)
 	}
 
-	configFilePath := filepath.Join(cwd, utils.ConfigFile)
+	configFilePath := filepath.Join(cwd, configFile)
 	if err := os.RemoveAll(configFilePath); err != nil {
 		return fmt.Errorf("failed to remove config file: %w", err)
-	}
-
-	return nil
-}
-
-// ValidateConfig validates the configuration data
-func ValidateConfig(config types.Config) error {
-	if strings.TrimSpace(config.ProjectID) == "" {
-		return fmt.Errorf("project ID cannot be empty")
-	}
-
-	if strings.TrimSpace(config.RepoName) == "" {
-		return fmt.Errorf("repository name cannot be empty")
 	}
 
 	return nil
@@ -97,7 +80,7 @@ func GetConfigPath() (string, error) {
 		return "", fmt.Errorf("failed to get current directory: %w", err)
 	}
 
-	return filepath.Join(cwd, utils.ConfigFile), nil
+	return filepath.Join(cwd, configFile), nil
 }
 
 // ConfigExists checks if a configuration file exists

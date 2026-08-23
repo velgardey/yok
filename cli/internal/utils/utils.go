@@ -16,6 +16,7 @@ import (
 	"github.com/AlecAivazis/survey/v2"
 	"github.com/briandowns/spinner"
 	"github.com/gookit/color"
+	"github.com/velgardey/yok/cli/internal/config"
 	"github.com/velgardey/yok/cli/internal/types"
 )
 
@@ -32,10 +33,10 @@ var (
 
 // Constants
 const (
-	ApiURL      = "http://api.yok.ninja"
-	ConfigFile  = ".yok-config.json"
-	HttpTimeout = 30 * time.Second
-	UserAgent   = "Yok-CLI-Updater"
+	DefaultAPIURL     = "https://api.yok.ninja"
+	DefaultSiteDomain = "yok.ninja"
+	HttpTimeout       = 30 * time.Second
+	UserAgent         = "Yok-CLI-Updater"
 )
 
 // CreateHTTPClient returns an HTTP client with appropriate timeouts and settings
@@ -43,6 +44,66 @@ func CreateHTTPClient() *http.Client {
 	return &http.Client{
 		Timeout: time.Second * 30,
 	}
+}
+
+// ResolvedConfig is the effective configuration after merging the config file,
+// defaults, and environment overrides.
+type ResolvedConfig struct {
+	APIURL     string
+	Token      string
+	SiteDomain string
+}
+
+// ResolveConfig merges the local config file with defaults and YOK_* env overrides.
+func ResolveConfig() ResolvedConfig {
+	cfg, _ := config.LoadConfig()
+	rc := ResolvedConfig{
+		APIURL:     cfg.APIURL,
+		Token:      cfg.Token,
+		SiteDomain: cfg.SiteDomain,
+	}
+	if rc.APIURL == "" {
+		rc.APIURL = DefaultAPIURL
+	}
+	if rc.SiteDomain == "" {
+		rc.SiteDomain = DefaultSiteDomain
+	}
+	if v := os.Getenv("YOK_API_URL"); v != "" {
+		rc.APIURL = v
+	}
+	if v := os.Getenv("YOK_SITE_DOMAIN"); v != "" {
+		rc.SiteDomain = v
+	}
+	if v := os.Getenv("YOK_TOKEN"); v != "" {
+		rc.Token = v
+	}
+	return rc
+}
+
+// WithAuth attaches the bearer token to a request before it is sent.
+func WithAuth(req *http.Request) *http.Request {
+	if rc := ResolveConfig(); rc.Token != "" {
+		req.Header.Set("Authorization", "Bearer "+rc.Token)
+	}
+	return req
+}
+
+// DeploymentURL returns the public URL of a deployment identifier under the configured site domain.
+func DeploymentURL(identifier string) string {
+	return fmt.Sprintf("https://%s.%s", identifier, ResolveConfig().SiteDomain)
+}
+
+// GetProjectIDOrExit loads the config and exits if no project ID is found
+func GetProjectIDOrExit() types.Config {
+	conf, err := config.LoadConfig()
+	HandleError(err, "Error loading configuration")
+
+	if conf.ProjectID == "" {
+		ErrorColor.Println("No project configured. Run 'yok create' or 'yok deploy' first.")
+		os.Exit(1)
+	}
+
+	return conf
 }
 
 // HandleError prints error messages and exits with non-zero code if err is not nil

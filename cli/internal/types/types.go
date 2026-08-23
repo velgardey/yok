@@ -32,8 +32,11 @@ type DeploymentResponse struct {
 
 // Config stores local configuration
 type Config struct {
-	ProjectID string `json:"projectId"`
-	RepoName  string `json:"repoName"`
+	ProjectID  string `json:"projectId"`
+	RepoName   string `json:"repoName"`
+	APIURL     string `json:"apiUrl,omitempty"`
+	Token      string `json:"token,omitempty"`
+	SiteDomain string `json:"siteDomain,omitempty"`
 }
 
 // ProjectCheckResponse wraps a project check response

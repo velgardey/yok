@@ -165,7 +165,7 @@ func showDeploymentUrls(projectID string, deploymentID string, deploymentURL str
 	// Try to get the project slug for a nicer URL
 	project, err := api.GetProject(projectID)
 	if err == nil && project.Slug != "" {
-		fmt.Printf("- https://%s.yok.ninja\n", project.Slug)
+		fmt.Printf("- %s\n", utils.DeploymentURL(project.Slug))
 	}
 
 	// Always try to show a deployment-specific URL
@@ -178,7 +178,7 @@ func showDeploymentUrls(projectID string, deploymentID string, deploymentURL str
 			fmt.Printf("- %s\n", deployment.DeploymentUrl)
 		} else {
 			// Construct the URL if we couldn't get it from the API
-			fmt.Printf("- https://%s.yok.ninja\n", deploymentID)
+			fmt.Printf("- %s\n", utils.DeploymentURL(deploymentID))
 		}
 	}
 }

@@ -7,7 +7,6 @@ import (
 	"github.com/AlecAivazis/survey/v2"
 	"github.com/spf13/cobra"
 	"github.com/velgardey/yok/cli/internal/api"
-	"github.com/velgardey/yok/cli/internal/config"
 	"github.com/velgardey/yok/cli/internal/types"
 	"github.com/velgardey/yok/cli/internal/utils"
 )
@@ -32,7 +31,7 @@ func init() {
 		Short: "List all deployments for your project",
 		Run: func(cmd *cobra.Command, args []string) {
 			// Get project ID and ensure it exists
-			conf := config.GetProjectIDOrExit()
+			conf := utils.GetProjectIDOrExit()
 
 			// Get deployments
 			s := utils.StartSpinner("Fetching deployments...")
@@ -73,7 +72,7 @@ func init() {
 			// If no deployment ID provided, ask the user to select from recent in-progress deployments
 			if len(args) == 0 {
 				// Load config and ensure project ID exists
-				conf := config.GetProjectIDOrExit()
+				conf := utils.GetProjectIDOrExit()
 
 				// Select a deployment that is in progress
 				var err error
@@ -198,7 +197,7 @@ func runStatus(cmd *cobra.Command, args []string) {
 	}
 
 	if deployment.Status == "COMPLETED" && project.Slug != "" {
-		utils.InfoColor.Printf("Public URL:       https://%s.yok.ninja\n", project.Slug)
+		utils.InfoColor.Printf("Public URL:       %s\n", utils.DeploymentURL(project.Slug))
 	}
 
 	if deployment.DeploymentUrl != "" {

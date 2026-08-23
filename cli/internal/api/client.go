@@ -32,10 +32,16 @@ func SetLogRenderer(renderer *utils.LogRenderer) {
 
 // FindProjectByName checks if a project with the given name already exists
 func FindProjectByName(name string) (*types.Project, error) {
-	escapedName := url.QueryEscape(name)
-	url := fmt.Sprintf("%s/project/check?name=%s", utils.ApiURL, escapedName)
+	rc := utils.ResolveConfig()
+	reqURL := fmt.Sprintf("%s/project/check?name=%s", rc.APIURL, url.QueryEscape(name))
 
-	resp, err := httpClient.Get(url)
+	req, err := http.NewRequest(http.MethodGet, reqURL, nil)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create request: %w", err)
+	}
+	utils.WithAuth(req)
+
+	resp, err := httpClient.Do(req)
 	if err != nil {
 		return nil, fmt.Errorf("failed to check project: %w", err)
 	}
@@ -93,11 +99,12 @@ func createProject(name, repoURL, framework string) (*types.Project, error) {
 		return nil, fmt.Errorf("failed to marshal project data: %w", err)
 	}
 
-	req, err := http.NewRequest("POST", utils.ApiURL+"/project", bytes.NewBuffer(jsonData))
+	req, err := http.NewRequest("POST", utils.ResolveConfig().APIURL+"/project", bytes.NewBuffer(jsonData))
 	if err != nil {
 		return nil, fmt.Errorf("failed to create request: %w", err)
 	}
 	req.Header.Set("Content-Type", "application/json")
+	utils.WithAuth(req)
 
 	resp, err := httpClient.Do(req)
 	if err != nil {
@@ -132,11 +139,12 @@ func DeployProject(projectID string) (*types.DeploymentResponse, error) {
 		return nil, fmt.Errorf("failed to marshal deploy data: %w", err)
 	}
 
-	req, err := http.NewRequest("POST", utils.ApiURL+"/deploy", bytes.NewBuffer(jsonData))
+	req, err := http.NewRequest("POST", utils.ResolveConfig().APIURL+"/deploy", bytes.NewBuffer(jsonData))
 	if err != nil {
 		return nil, fmt.Errorf("failed to create request: %w", err)
 	}
 	req.Header.Set("Content-Type", "application/json")
+	utils.WithAuth(req)
 
 	resp, err := httpClient.Do(req)
 	if err != nil {
@@ -159,9 +167,13 @@ func DeployProject(projectID string) (*types.DeploymentResponse, error) {
 
 // GetDeploymentStatus gets the status of a deployment
 func GetDeploymentStatus(deploymentID string) (*types.Deployment, error) {
-	url := fmt.Sprintf("%s/deployment/%s", utils.ApiURL, deploymentID)
+	req, err := http.NewRequest(http.MethodGet, fmt.Sprintf("%s/deployment/%s", utils.ResolveConfig().APIURL, deploymentID), nil)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create request: %w", err)
+	}
+	utils.WithAuth(req)
 
-	resp, err := httpClient.Get(url)
+	resp, err := httpClient.Do(req)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get deployment status: %w", err)
 	}
@@ -181,9 +193,13 @@ func GetDeploymentStatus(deploymentID string) (*types.Deployment, error) {
 
 // ListDeployments lists deployments for a project
 func ListDeployments(projectID string) ([]types.Deployment, error) {
-	url := fmt.Sprintf("%s/project/%s/deployments", utils.ApiURL, projectID)
+	req, err := http.NewRequest(http.MethodGet, fmt.Sprintf("%s/project/%s/deployments", utils.ResolveConfig().APIURL, projectID), nil)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create request: %w", err)
+	}
+	utils.WithAuth(req)
 
-	resp, err := httpClient.Get(url)
+	resp, err := httpClient.Do(req)
 	if err != nil {
 		return nil, fmt.Errorf("failed to list deployments: %w", err)
 	}
@@ -212,11 +228,12 @@ func CancelDeployment(deploymentID string) error {
 		return err
 	}
 
-	req, err := http.NewRequest("POST", utils.ApiURL+"/deployment/"+deploymentID+"/cancel", bytes.NewBuffer(jsonData))
+	req, err := http.NewRequest("POST", utils.ResolveConfig().APIURL+"/deployment/"+deploymentID+"/cancel", bytes.NewBuffer(jsonData))
 	if err != nil {
 		return err
 	}
 	req.Header.Set("Content-Type", "application/json")
+	utils.WithAuth(req)
 
 	resp, err := httpClient.Do(req)
 	if err != nil {
@@ -234,8 +251,15 @@ func CancelDeployment(deploymentID string) error {
 
 // GetProject gets a project by ID
 func GetProject(projectID string) (*types.Project, error) {
+	rc := utils.ResolveConfig()
+
 	// Try to get the project directly by ID first
-	resp, err := httpClient.Get(utils.ApiURL + "/project/" + projectID)
+	req, err := http.NewRequest(http.MethodGet, rc.APIURL+"/project/"+projectID, nil)
+	if err != nil {
+		return nil, err
+	}
+	utils.WithAuth(req)
+	resp, err := httpClient.Do(req)
 	if err != nil {
 		return nil, err
 	}
@@ -247,7 +271,12 @@ func GetProject(projectID string) (*types.Project, error) {
 		resp.Body.Close()
 
 		// Get the deployments for this project
-		deploymentsResp, err := httpClient.Get(utils.ApiURL + "/project/" + projectID + "/deployments")
+		req, err := http.NewRequest(http.MethodGet, rc.APIURL+"/project/"+projectID+"/deployments", nil)
+		if err != nil {
+			return nil, err
+		}
+		utils.WithAuth(req)
+		deploymentsResp, err := httpClient.Do(req)
 		if err != nil {
 			return nil, err
 		}
@@ -329,7 +358,7 @@ func showDeploymentURLs(projectID string, deploymentURL string) {
 	project, err := GetProject(projectID)
 	if err == nil && project.Slug != "" {
 		utils.InfoColor.Printf("[i] Your site is available at:\n")
-		fmt.Printf("- https://%s.yok.ninja\n", project.Slug)
+		fmt.Printf("- %s\n", utils.DeploymentURL(project.Slug))
 		if deploymentURL != "" {
 			fmt.Printf("- %s\n", deploymentURL)
 		}
@@ -565,14 +594,20 @@ func PromptForProjectCreationDetails() (string, string, string, *types.Project, 
 
 // GetDeploymentLogs fetches logs for a specific deployment
 func GetDeploymentLogs(deploymentID string, lastEventID string) (*types.LogsResponse, error) {
-	url := fmt.Sprintf("%s/logs/%s", utils.ApiURL, deploymentID)
+	reqURL := fmt.Sprintf("%s/logs/%s", utils.ResolveConfig().APIURL, deploymentID)
 
 	// Add lastEventID as query parameter if it exists
 	if lastEventID != "" {
-		url = fmt.Sprintf("%s?lastEventID=%s", url, lastEventID)
+		reqURL = fmt.Sprintf("%s?lastEventID=%s", reqURL, lastEventID)
 	}
 
-	resp, err := httpClient.Get(url)
+	req, err := http.NewRequest(http.MethodGet, reqURL, nil)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create request: %w", err)
+	}
+	utils.WithAuth(req)
+
+	resp, err := httpClient.Do(req)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get deployment logs: %w", err)
 	}
@@ -606,30 +641,29 @@ func StreamDeploymentLogs(deploymentID string, stopChan chan bool) bool {
 	// Keep track of logs we've already seen to avoid duplicates
 	seenLogs := make(map[string]bool)
 
+	render := func(logs []types.LogEntry) {
+		for _, logEntry := range logs {
+			if seenLogs[logEntry.EventID] {
+				continue
+			}
+
+			seenLogs[logEntry.EventID] = true
+			logRenderer.RenderLogEntry(logEntry)
+			lastEventID = logEntry.EventID
+
+			if strings.Contains(logEntry.Log, "Error:") || strings.Contains(logEntry.Log, "Failed:") {
+				lastErrorMessage = logEntry.Log
+			}
+		}
+	}
+
 	// First fetch to get initial logs
 	logs, err := GetDeploymentLogs(deploymentID, "")
 	if err != nil {
 		utils.ErrorColor.Printf("Error fetching logs: %v\n", err)
 		return false
 	}
-
-	// Display initial logs
-	for _, logEntry := range logs.Data.Logs {
-		seenLogs[logEntry.EventID] = true
-		logRenderer.RenderLogEntry(logEntry)
-		lastEventID = logEntry.EventID
-
-		// Keep track of the last error message
-		if strings.Contains(logEntry.Log, "Error:") || strings.Contains(logEntry.Log, "Failed:") {
-			lastErrorMessage = logEntry.Log
-		}
-
-		// Check for completion marker
-		if strings.Contains(logEntry.Log, "Build output uploaded to S3 successfully") {
-			utils.InfoColor.Println("\nDeployment completed successfully!")
-			return true
-		}
-	}
+	render(logs.Data.Logs)
 
 	// Start polling for new logs
 	ticker := time.NewTicker(1 * time.Second)
@@ -644,35 +678,15 @@ func StreamDeploymentLogs(deploymentID string, stopChan chan bool) bool {
 				utils.ErrorColor.Printf("Error fetching logs: %v\n", err)
 				continue
 			}
+			render(newLogs.Data.Logs)
 
-			// Process new logs
-			for _, logEntry := range newLogs.Data.Logs {
-				if seenLogs[logEntry.EventID] {
-					continue
-				}
-
-				seenLogs[logEntry.EventID] = true
-				logRenderer.RenderLogEntry(logEntry)
-				lastEventID = logEntry.EventID
-
-				if strings.Contains(logEntry.Log, "Error:") || strings.Contains(logEntry.Log, "Failed:") {
-					lastErrorMessage = logEntry.Log
-				}
-
-				// Check for completion marker
-				if strings.Contains(logEntry.Log, "Build output uploaded to S3 successfully") {
-					utils.InfoColor.Println("\nDeployment completed successfully!")
-					return true
-				}
-			}
-
-			// Check deployment status to catch completion/failure without log entry
+			// Completion/failure comes exclusively from deployment status polling
 			deployment, err := GetDeploymentStatus(deploymentID)
 			if err == nil {
 				switch deployment.Status {
 				case "COMPLETED":
-					// Let's check once more for the final log in case it just came in
-					ticker.Reset(3 * time.Second)
+					utils.SuccessColor.Println("\n[OK] Deployment completed successfully!")
+					return true
 				case "FAILED":
 					utils.ErrorColor.Println("\nDeployment failed.")
 					if lastErrorMessage != "" {

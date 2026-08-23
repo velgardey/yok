@@ -84,7 +84,7 @@ func init() {
 				fmt.Printf("Slug: %s\n", existingProject.Slug)
 				fmt.Printf("Git URL: %s\n", existingProject.GitRepoURL)
 				if existingProject.Slug != "" {
-					fmt.Printf("Project URL: https://%s.yok.ninja\n", existingProject.Slug)
+					fmt.Printf("Project URL: %s\n", utils.DeploymentURL(existingProject.Slug))
 				}
 
 				// Save project ID
@@ -118,7 +118,7 @@ func init() {
 			fmt.Printf("Slug: %s\n", project.Slug)
 			fmt.Printf("Git URL: %s\n", project.GitRepoURL)
 			if project.Slug != "" {
-				fmt.Printf("Project URL: https://%s.yok.ninja\n", project.Slug)
+				fmt.Printf("Project URL: %s\n", utils.DeploymentURL(project.Slug))
 			}
 
 			// Save project ID
