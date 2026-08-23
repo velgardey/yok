@@ -87,11 +87,11 @@ func init() {
 					fmt.Printf("Project URL: %s\n", utils.DeploymentURL(existingProject.Slug))
 				}
 
-				// Save project ID
-				conf := types.Config{
-					ProjectID: existingProject.ID,
-					RepoName:  existingProject.Name,
-				}
+				// Save project ID (load existing config so token/apiUrl/siteDomain survive)
+				conf, cfgErr := config.LoadConfig()
+				utils.HandleError(cfgErr, "Error loading configuration")
+				conf.ProjectID = existingProject.ID
+				conf.RepoName = existingProject.Name
 				err = config.SaveConfig(conf)
 				if err != nil {
 					utils.WarnColor.Printf("Warning: Could not save project ID: %v\n", err)
@@ -121,11 +121,11 @@ func init() {
 				fmt.Printf("Project URL: %s\n", utils.DeploymentURL(project.Slug))
 			}
 
-			// Save project ID
-			conf := types.Config{
-				ProjectID: project.ID,
-				RepoName:  project.Name,
-			}
+			// Save project ID (load existing config so token/apiUrl/siteDomain survive)
+			conf, cfgErr := config.LoadConfig()
+			utils.HandleError(cfgErr, "Error loading configuration")
+			conf.ProjectID = project.ID
+			conf.RepoName = project.Name
 			err = config.SaveConfig(conf)
 			if err != nil {
 				utils.WarnColor.Printf("Warning: Could not save project ID: %v\n", err)

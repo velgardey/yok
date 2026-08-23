@@ -10,7 +10,6 @@ import (
 	"github.com/AlecAivazis/survey/v2"
 	"github.com/spf13/cobra"
 	"github.com/velgardey/yok/cli/internal/config"
-	"github.com/velgardey/yok/cli/internal/types"
 	"github.com/velgardey/yok/cli/internal/utils"
 )
 
@@ -27,11 +26,12 @@ var loginCmd = &cobra.Command{
 		token = strings.TrimSpace(token)
 
 		rc := utils.ResolveConfig()
-		cfg := types.Config{
-			Token:      token,
-			APIURL:     rc.APIURL,
-			SiteDomain: rc.SiteDomain,
-		}
+		// Load existing config so projectId/repoName survive a re-login.
+		cfg, cfgErr := config.LoadConfig()
+		utils.HandleError(cfgErr, "Failed to load config")
+		cfg.Token = token
+		cfg.APIURL = rc.APIURL
+		cfg.SiteDomain = rc.SiteDomain
 
 		req, err := http.NewRequest(http.MethodGet, strings.TrimRight(cfg.APIURL, "/")+"/auth/me", nil)
 		utils.HandleError(err, "Failed to build validation request")

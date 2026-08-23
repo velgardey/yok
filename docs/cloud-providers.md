@@ -24,9 +24,9 @@ Notes on the Azure targets:
   `<OUTPUT_PREFIX>/<deploymentId>/<file>` with default prefix `__output`, so the reverse
   proxy keeps resolving `<ARTIFACT_BASE_URL>/<deploymentId>/...` unchanged.
 - **Log transport**: Event Hubs exposes a Kafka-compatible endpoint. Set
-  `KAFKA_BROKER=<namespace>.servicebus.windows.net:9093` and use SASL PLAIN where both
-  username and password are `$ConnectionString` (the literal string, followed by your
-  connection string value). kafkajs needs no code change. If TLS CA validation needs a
+  `KAFKA_BROKER=<namespace>.servicebus.windows.net:9093` and use SASL PLAIN where the
+  username is the literal string `$ConnectionString` and the password is your full
+  Event Hubs connection string. kafkajs needs no code change. If TLS CA validation needs a
   custom CA, `KAFKA_CA_PATH` is already supported on both producer and consumer.
 - **Artifact serving**: private Blob containers have no public URL per object like an
   S3 bucket policy allows. Serve artifacts via CDN in front of the container, or via
@@ -70,6 +70,12 @@ select it via env.
    origin.
 
 ## Operations
+
+### Cancelling deployments
+
+`POST /deployment/:id/cancel` (used by `yok cancel`) flips the deployment status in the
+database only. It does **not** cancel the running build task (e.g., the ECS Fargate task),
+because task ARNs are not persisted; the compute task keeps running until it finishes.
 
 ### Claiming legacy projects
 

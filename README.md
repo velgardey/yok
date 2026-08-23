@@ -287,6 +287,10 @@ yok cancel abc123def
 - If no deployment ID is provided, you'll be prompted to select from in-progress deployments
 - Requires confirmation before cancellation
 
+**Limitations:** Cancellation updates the deployment's status in the database only. It does
+not stop the running build task (e.g., the ECS Fargate task), because task identifiers are
+not persisted; the compute task keeps running until it finishes on its own.
+
 ### Git Integration
 
 Yok CLI acts as a Git wrapper, allowing you to use standard Git commands:
@@ -349,7 +353,9 @@ key each component reads:
 Provider selection is env-driven: `CLOUD_PROVIDER` picks the API's compute provider,
 `STORAGE_PROVIDER` picks the build server's artifact storage adapter, and
 `ARTIFACT_BASE_URL` points the reverse proxy at the artifact origin. To run Yok on another
-cloud (e.g. Azure), see [docs/cloud-providers.md](docs/cloud-providers.md).
+cloud (e.g. Azure), see [docs/cloud-providers.md](docs/cloud-providers.md). For an
+end-to-end manual verification of a fresh stack, see
+[docs/smoke-test.md](docs/smoke-test.md).
 
 ## Troubleshooting
 
