@@ -4,9 +4,10 @@
   "description": "",
   "main": "index.js",
   "scripts": {
-    "dev": "ts-node index.ts",
+    "dev": "tsx watch --env-file=.env src/index.ts",
     "build": "tsc",
-    "prod": "tsc && node index.js",
+    "prod": "tsc && node dist/index.js",
+    "test": "vitest run",
     "prisma:generate": "prisma generate",
     "prisma:deploy": "prisma migrate deploy"
   },
@@ -18,15 +19,13 @@
     "@aws-sdk/client-ecs": "^3.830.0",
     "@clickhouse/client": "^1.11.2",
     "@prisma/client": "^6.10.0",
-    "@prisma/extension-accelerate": "^2.0.1",
     "cors": "^2.8.5",
     "dotenv": "^16.5.0",
     "express": "^5.1.0",
     "kafkajs": "^2.2.4",
     "random-word-slugs": "^0.1.7",
-    "ts-node": "^10.9.2",
     "uuid": "^11.1.0",
-    "zod": "^3.25.67"
+    "zod": "^4.0.0"
   },
   "devDependencies": {
     "@types/cors": "^2.8.19",
@@ -34,6 +33,8 @@
     "@types/node": "^24.0.3",
     "@types/uuid": "^10.0.0",
     "prisma": "^6.10.0",
-    "typescript": "^5.8.3"
+    "tsx": "^4.19.2",
+    "typescript": "^5.8.3",
+    "vitest": "^3.0.0"
   }
 }
